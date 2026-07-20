@@ -31,12 +31,13 @@ class InvalidTenantTransitionException(id: String, from: TenantStatus, to: Tenan
     RuntimeException("Cannot transition tenant $id from $from to $to")
 
 /**
- * Ch.18 §2/§4: the control plane's own admin surface. Deliberately reuses
- * the platform's existing "admin" role rather than a separate platform-ops
- * identity space — a real system would keep tenant provisioning entirely
- * out of any single tenant's own identity provider, but this codebase has
- * no such separate identity space, so this is a known, documented
- * simplification rather than a hidden gap.
+ * Ch.18 §2/§4: the control plane's own admin surface. Lifecycle management
+ * (create/activate/offboard/list) requires the "platform-admin" role — a
+ * separate Keycloak realm role, held by a dedicated `platform-ops` user
+ * with no real business tenant, distinct from any tenant's own "admin"
+ * role. A tenant's own admin can only read their own tenant's record
+ * (`get()`), not manage any tenant's lifecycle, including their own —
+ * offboarding is a platform decision, not self-service.
  */
 @RestController
 @RequestMapping("/api/v1/tenants")
@@ -54,15 +55,18 @@ class TenantController(
         return ResponseEntity.status(HttpStatus.CREATED).body(tenant.toResponse())
     }
 
+    /** A tenant's own "admin" may read their own record (e.g. to see why they're locked out post-offboard) — resourceTenant scoping via tenant_ok is what prevents reading anyone else's. platform-admin can read any. */
     @GetMapping("/{id}")
     fun get(@AuthenticationPrincipal jwt: Jwt, @PathVariable id: String): ResponseEntity<TenantResponse> {
-        authorizer.check(AuthzInput("tenant_read", jwt.tenantId().value, jwt.roles()))
-        return ResponseEntity.ok(loadOrThrow(id).toResponse())
+        val tenant = loadOrThrow(id)
+        authorizer.check(AuthzInput("tenant_read", jwt.tenantId().value, jwt.roles(), tenant.tenantId))
+        return ResponseEntity.ok(tenant.toResponse())
     }
 
+    /** Platform-admin only — the whole registry, not scoped to any single tenant. */
     @GetMapping
     fun list(@AuthenticationPrincipal jwt: Jwt): ResponseEntity<List<TenantResponse>> {
-        authorizer.check(AuthzInput("tenant_read", jwt.tenantId().value, jwt.roles()))
+        authorizer.check(AuthzInput("tenant_list", jwt.tenantId().value, jwt.roles()))
         return ResponseEntity.ok(repository.findAll().map { it.toResponse() })
     }
 

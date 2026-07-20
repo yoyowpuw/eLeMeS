@@ -304,6 +304,26 @@ Spring Boot services:
     `ACTIVE` directly afterward (the app's own state machine has no path
     back from `OFFBOARDED` by design — a direct DB/OPA fix, same pattern as
     other test-environment restores in this project, not a feature).
+17. **A tenant's own admin genuinely cannot provision or offboard tenants
+    anymore — including their own — only a separate platform-admin
+    identity can, and that separation is enforced by OPA, not just by
+    which buttons a UI happens to show.** Added a distinct Keycloak realm
+    role (`platform-admin`) held by a dedicated `platform-ops` user with no
+    real business tenant, and split what was one `tenant_read` action
+    covering both single-tenant reads and the full registry listing into
+    two: `tenant_list` (platform-admin only) and `tenant_read`
+    (tenant-scoped self-read — a tenant's own `admin` can see their own
+    record, `tenant_ok` blocks reading anyone else's). Proven against the
+    real running services, not just the policy in isolation: `admin1`
+    (acme-corp) got 403 trying to create a brand-new tenant, 403 trying to
+    offboard their own tenant, and 403 trying to list the whole registry —
+    but still 200 reading their own tenant's record. `platform-ops` created,
+    activated, and offboarded a tenant, 200 the whole way, despite that
+    role's own JWT `tenant_id` (`"platform"`) never matching any real
+    business tenant — `tenant_ok` has an explicit bypass for
+    `platform-admin` specifically, since that role is inherently
+    cross-tenant by design, not scoped to any single one. `learner1` (no
+    admin role at all) still got 403 outright, and no token still got 401.
 
 ## Tech stack (per the AKB's ADRs)
 
@@ -375,23 +395,23 @@ Spring Boot services:
   pinning is (see "What's proven" #7), but there's no multi-step path to
   record a realized sequence *through* yet.
 - **No idempotency-key handling** (Ch.13 §4) on mutation endpoints yet.
-- **Data-plane isolation (RLS) and the control plane's core lifecycle are
-  both real now; the silo tier and everything else Ch.18 names around
-  provisioning aren't.** Pooled tenants get database-enforced row isolation
-  (What's proven #15), and the control plane (Ch.18 — tenant registry,
-  `PROVISIONING → ACTIVE → OFFBOARDED` lifecycle) genuinely revokes access
-  platform-wide the instant a tenant is offboarded (#16) — but the **silo
-  tier** (a dedicated cluster for tenants over the size/regulatory
-  threshold) is metadata-only, `isolationTier: SILO` on a tenant record
-  doesn't actually provision separate infrastructure anywhere; there's no
-  SSO/SCIM/HRIS configuration step in the provisioning lifecycle (Ch.18 §4
-  names it, `activate()` just flips a status); tenant-provisioning's own
-  admin surface reuses the platform's ordinary "admin" role rather than a
-  separate platform-ops identity, so in this codebase a tenant's own admin
-  can provision/offboard *any* tenant, not just their own — a real gap, not
-  a stylistic one, documented rather than hidden; and there's genuinely
-  only two tenants' worth of real data in this environment regardless
-  (`acme-corp`/`globex-corp`, both in the same pooled cluster).
+- **Data-plane isolation (RLS), the control plane's core lifecycle, and its
+  platform-vs-tenant identity separation are all real now; the silo tier
+  and the provisioning workflow's config steps aren't.** Pooled tenants get
+  database-enforced row isolation (What's proven #15); the control plane
+  (Ch.18 — tenant registry, `PROVISIONING → ACTIVE → OFFBOARDED` lifecycle)
+  genuinely revokes access platform-wide the instant a tenant is offboarded
+  (#16); and a tenant's own `admin` genuinely cannot manage the tenant
+  registry at all anymore — only a dedicated `platform-admin` Keycloak role
+  can (#17). What's still not built: the **silo tier** (a dedicated cluster
+  for tenants over the size/regulatory threshold) is metadata-only,
+  `isolationTier: SILO` on a tenant record doesn't actually provision
+  separate infrastructure anywhere; there's no SSO/SCIM/HRIS configuration
+  step in the provisioning lifecycle (Ch.18 §4 names it, `activate()` just
+  flips a status); and there's genuinely only two tenants' worth of real
+  business data in this environment regardless (`acme-corp`/`globex-corp`,
+  both in the same pooled cluster) — `platform-ops` isn't a business
+  tenant, it's the platform identity that manages the registry itself.
 - **Testcontainers integration test is broken on this machine** — see below.
 
 **Operational gotcha worth knowing about:** if you experiment with schema
@@ -488,7 +508,8 @@ JAVA_HOME="/path/to/jdk-21" ./gradlew :modules:tenant-provisioning:bootRun
 ```bash
 # 3. Get a real token (see infra/keycloak/realm-export.json for the seeded
 #    users — learner1/admin1 in tenant "acme-corp", plus maya, a "manager"-
-#    role user in the same tenant, and a second-tenant user)
+#    role user in the same tenant, a second-tenant user, and platform-ops,
+#    a "platform-admin"-role user with no real business tenant)
 TOKEN=$(curl -s -X POST http://localhost:8080/realms/elemes/protocol/openid-connect/token \
   -d "grant_type=password" -d "client_id=elemes-service" \
   -d "username=learner1" -d "password=learner1" \
@@ -637,22 +658,17 @@ doesn't publish.
 
 ## Next increments, in order
 
-1. **A real platform-ops identity for tenant-provisioning**, separate from
-   any single tenant's own "admin" role — right now a tenant's admin can
-   provision or offboard *any* tenant, including ones they have no business
-   relationship to, which is the sharpest documented gap left from this
-   increment. Needs either a dedicated Keycloak realm/client for platform
-   staff or a distinct role that OPA's `tenant_management_actions` rule can
-   check for instead of reusing `"admin"` verbatim.
-2. Real KMS integration (Ch.40 §3), replacing `.local-kms/` — required
-   before any certificate here means anything legally.
-3. Explicit outbox dedup/processed-message tracking on the consumer side,
+1. Real KMS integration (Ch.40 §3), replacing `.local-kms/` — required
+   before any certificate here means anything legally. This is the top item
+   now — the platform-ops identity gap named in the previous increment is
+   closed (`platform-admin` role, see "What's proven" #17).
+2. Explicit outbox dedup/processed-message tracking on the consumer side,
    tightening the "guards happen to make this safe" idempotency story noted
    above into something more deliberate.
-4. Learning Paths (Ch.21) as an actual multi-step concept, so the
+3. Learning Paths (Ch.21) as an actual multi-step concept, so the
    certificate's realized branch/step sequence (Ch.21 §7) has something real
    to record — content-version pinning is done, this is the remaining half
    of that chapter's requirement.
-5. The silo tier (Ch.12 §2/Ch.18 §3) as more than tenant metadata — actually
+4. The silo tier (Ch.12 §2/Ch.18 §3) as more than tenant metadata — actually
    provisioning a dedicated cluster for a tenant crossing the threshold is
    still entirely unmodeled.

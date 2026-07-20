@@ -45,10 +45,18 @@ restricted_actions := {
 	"revoke_certificate": {"admin", "manager"},
 	"org_unit_create": {"admin", "manager"},
 	"org_unit_reparent": {"admin", "manager"},
-	"tenant_create": {"admin"},
-	"tenant_read": {"admin"},
-	"tenant_activate": {"admin"},
-	"tenant_offboard": {"admin"},
+	# Ch.18: tenant lifecycle management is platform-admin only — a
+	# tenant's own "admin" role must NOT be able to provision or offboard
+	# OTHER tenants (or even its own — offboarding is a platform decision,
+	# not a self-service one). "tenant_read" is the one exception: a
+	# tenant's own admin may read their own tenant's registry record
+	# (self-service status visibility, tenant_ok-scoped below), so it
+	# lists both roles.
+	"tenant_create": {"platform-admin"},
+	"tenant_list": {"platform-admin"},
+	"tenant_read": {"admin", "platform-admin"},
+	"tenant_activate": {"platform-admin"},
+	"tenant_offboard": {"platform-admin"},
 }
 
 # Ch.19: actions in this set additionally require org_ok when the caller's
@@ -59,14 +67,14 @@ restricted_actions := {
 org_scoped_actions := {"revoke_certificate", "create_course", "publish_course_version", "org_unit_reparent"}
 
 # Ch.18: tenant-management actions are deliberately exempt from tenant_active
-# below — otherwise a tenant stuck in PROVISIONING could never call
-# tenant_activate on itself (tenant_active would have to already be true for
-# an action whose entire purpose is making it true), and an OFFBOARDED
-# tenant's admin could never be re-onboarded. A real system would perform
-# these as a separate platform-ops identity, entirely outside any single
-# tenant's own active/offboarded status; this codebase has no such identity
-# space, so the exemption is scoped to exactly these four actions instead.
-tenant_management_actions := {"tenant_create", "tenant_read", "tenant_activate", "tenant_offboard"}
+# below. Two independent reasons stack here: (1) platform-admin's own
+# caller_tenant ("platform") is never itself a registered business tenant,
+# so this mostly wouldn't bite that role anyway — but (2) "tenant_read" is
+# also held by plain "admin", and a tenant's own admin must still be able
+# to see their OWN tenant's status after it's offboarded (to see *why*
+# they're locked out) or while still PROVISIONING — exempting it here is
+# what makes that possible without a separate carve-out.
+tenant_management_actions := {"tenant_create", "tenant_list", "tenant_read", "tenant_activate", "tenant_offboard"}
 
 allow if {
 	tenant_ok
@@ -114,6 +122,16 @@ tenant_ok if {
 	input.resource_tenant == input.caller_tenant
 }
 
+# Ch.18: platform-admin is inherently cross-tenant — its own caller_tenant
+# ("platform") will never equal any real business tenant's id, so without
+# this a strict equality check would lock platform-admin out of reading
+# every tenant's own record. role_ok (below) is still what actually gates
+# which actions platform-admin may perform — this only means "there's no
+# single tenant this role is confined to," not "this role can do anything."
+tenant_ok if {
+	"platform-admin" in input.caller_roles
+}
+
 role_ok if {
 	input.action in open_actions
 }
@@ -122,6 +140,12 @@ role_ok if {
 	required := restricted_actions[input.action]
 	"admin" in required
 	"admin" in input.caller_roles
+}
+
+role_ok if {
+	required := restricted_actions[input.action]
+	"platform-admin" in required
+	"platform-admin" in input.caller_roles
 }
 
 role_ok if {
