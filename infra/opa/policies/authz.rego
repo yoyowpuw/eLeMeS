@@ -43,7 +43,10 @@ restricted_actions := {
 
 # Ch.19: actions in this set additionally require org_ok when the caller's
 # only qualifying role is "manager" — "admin" always stays tenant-wide.
-org_scoped_actions := {"revoke_certificate"}
+# "org_unit_create" is deliberately absent: a new unit is always created
+# unparented, so there's no target org unit yet to scope against — see
+# OrgUnitController.create()'s doc comment.
+org_scoped_actions := {"revoke_certificate", "create_course", "publish_course_version", "org_unit_reparent"}
 
 allow if {
 	tenant_ok

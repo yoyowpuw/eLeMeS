@@ -11,4 +11,6 @@ data class Course(
     val createdAt: Instant,
     /** Always set — creating a course always creates version 1 in the same transaction (Ch.12 §7). */
     val currentVersionId: UUID,
+    /** Ch.19: the org unit this course "belongs to", if any — opt-in, used only for manager-scoped authorization (create/publish). */
+    val orgUnitId: UUID? = null,
 )

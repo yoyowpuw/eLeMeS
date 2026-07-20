@@ -22,18 +22,25 @@ class CourseRepository(private val jdbcTemplate: JdbcTemplate) {
      * then point the course at it — all within this one transaction.
      */
     @Transactional
-    fun create(courseId: UUID, tenantId: String, code: String, title: String, initialContentHash: String): Course {
+    fun create(
+        courseId: UUID,
+        tenantId: String,
+        code: String,
+        title: String,
+        initialContentHash: String,
+        orgUnitId: UUID? = null,
+    ): Course {
         val now = Instant.now()
         val versionId = UUID.randomUUID()
 
         jdbcTemplate.update(
-            "insert into courses (course_id, tenant_id, code, title, created_at, current_version_id) values (?, ?, ?, ?, ?, null)",
-            courseId, tenantId, code, title, Timestamp.from(now),
+            "insert into courses (course_id, tenant_id, code, title, created_at, current_version_id, org_unit_id) values (?, ?, ?, ?, ?, null, ?)",
+            courseId, tenantId, code, title, Timestamp.from(now), orgUnitId,
         )
         insertVersion(ContentVersion(versionId, tenantId, courseId, versionNumber = 1, contentHash = initialContentHash, createdAt = now))
         jdbcTemplate.update("update courses set current_version_id = ? where course_id = ?", versionId, courseId)
 
-        return Course(courseId, tenantId, code, title, now, versionId)
+        return Course(courseId, tenantId, code, title, now, versionId, orgUnitId)
     }
 
     /**
@@ -64,7 +71,7 @@ class CourseRepository(private val jdbcTemplate: JdbcTemplate) {
 
     fun findById(courseId: UUID): Course? =
         jdbcTemplate.query(
-            "select course_id, tenant_id, code, title, created_at, current_version_id from courses where course_id = ?",
+            "select course_id, tenant_id, code, title, created_at, current_version_id, org_unit_id from courses where course_id = ?",
             { rs, _ ->
                 Course(
                     courseId = UUID.fromString(rs.getString("course_id")),
@@ -73,6 +80,7 @@ class CourseRepository(private val jdbcTemplate: JdbcTemplate) {
                     title = rs.getString("title"),
                     createdAt = rs.getTimestamp("created_at").toInstant(),
                     currentVersionId = UUID.fromString(rs.getString("current_version_id")),
+                    orgUnitId = rs.getString("org_unit_id")?.let(UUID::fromString),
                 )
             },
             courseId,

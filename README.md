@@ -145,6 +145,29 @@ Spring Boot services:
     `learner1` still gets 403 outright, no token still gets 401, re-revoking
     an already-revoked certificate still 409s, and `/verify` stays public
     with no token even for a certificate a manager just revoked.
+12. **Org-scoping extends past certificate revocation — course authoring
+    and org re-parenting are subtree-limited for managers too now.**
+    `create_course`, `publish_course_version`, and `org_unit_reparent` all
+    got the same treatment as item #11. Proof, all against real services: a
+    course tagged with `Frontend`'s `orgUnitId` (inside `maya`'s subtree)
+    can be created and have a new version published by `maya` — 201 both
+    times; the same two calls against a course tagged with an unrelated
+    `Sales` unit both come back 403 for `maya`, and 201/201 for `admin1`; a
+    course created with no `orgUnitId` at all stays open to `maya` (org-
+    scoping is opt-in, never a blanket lockout). Re-parenting got the
+    fullest test: `maya` moving a unit she *doesn't* manage (`Backend`)
+    under one she does (`Platform`) is 403 — the *source* isn't in her
+    scope; `maya` moving `Frontend` (which she does manage) under `Sales`
+    (which she doesn't) is also 403 — the *destination* isn't in her scope
+    either, so a manager can't "give away" part of the org into a hierarchy
+    they don't control; `maya` moving `Frontend` under `Mobile` (both under
+    `Platform`, both in scope) succeeds with 200; `admin1` moving two units
+    neither in `maya`'s scope succeeds regardless, 200. `org_unit_create`
+    was deliberately left *out* of this — a brand-new unit has no target org
+    to scope against until a separate, already-scoped `reparent` call
+    attaches it somewhere — confirmed `maya` can still create org units
+    freely. Standard regression set re-checked clean: `learner1` still 403,
+    no token still 401, plain tenant-scoped reads unaffected.
 
 ## Tech stack (per the AKB's ADRs)
 
@@ -171,24 +194,23 @@ Spring Boot services:
   surface, and there's no per-resource ownership check finer than "same
   tenant" (e.g. a `manager` can act on any resource in their tenant, not
   just ones they were assigned).
-- **Org Hierarchy is real and now feeds one real authorization decision,
-  not four.** The closure-table model, re-parenting, and matrixed hierarchy
-  types are tested (see "What's proven" #10), and `revoke_certificate` is
-  genuinely org-scoped for managers now (see "What's proven" #11) — but two
-  things named in Ch.19 are still deliberately not built: (1)
-  `OrgUnitChanged`/`OrgUnitReparented` events still aren't published to
-  Kafka (§4) — there's still no consumer for them, since Assignment's
-  eligibility-computation use case (§3, ADR-032's 5-min TTL cache/fallback)
-  doesn't exist as separate logic in this codebase; (2) course creation/
-  publishing and org-unit management themselves are still just tenant+role
-  checked, not org-scoped — a `manager` can still create or publish any
-  course, or reparent any org unit, in their tenant. Only the one action
-  that most obviously needed it (revoking someone's certificate) got
-  scoped; the other restricted actions are the next step, not this one.
-  Org-unit membership itself also stays a single `managerUserId` field on
-  each unit, resolved via `GET /org-units/my-scope` on every check that
-  needs it — no caching (that's exactly ADR-032's still-missing piece), and
-  no real HRIS/directory sync behind it.
+- **Org Hierarchy is real and now feeds four real authorization decisions,
+  not one.** The closure-table model, re-parenting, and matrixed hierarchy
+  types are tested (see "What's proven" #10), and `revoke_certificate`,
+  `create_course`, `publish_course_version`, and `org_unit_reparent` are all
+  genuinely org-scoped for managers now (see "What's proven" #11–12).
+  `org_unit_create` is the one deliberate exception — a brand-new unit has
+  no target org to scope against until a separate `reparent` call attaches
+  it somewhere, so it stays tenant+role only by design, not by omission.
+  What's still not built: (1) `OrgUnitChanged`/`OrgUnitReparented` events
+  still aren't published to Kafka (§4) — there's still no consumer for
+  them, since Assignment's eligibility-computation use case (§3, ADR-032's
+  5-min TTL cache/fallback) doesn't exist as separate logic in this
+  codebase; (2) org-unit membership itself stays a single `managerUserId`
+  field on each unit, resolved fresh via `GET /org-units/my-scope` (or an
+  in-process equivalent, inside org-hierarchy itself) on every single
+  org-scoped check — no caching (that's exactly ADR-032's still-missing
+  piece) and no real HRIS/directory sync behind any of it.
 - **Certificate-signing key is a local file, not an HSM/KMS.** `.local-kms/`
   holds a plaintext RSA private key. It is persisted across restarts purely
   so local demo certificates keep verifying — this has zero of the protection
@@ -369,7 +391,7 @@ modules/
                            EventSourcedAggregate, JdbcOutboxStore + OutboxPoller (transactional outbox),
                            {Assessment,Enrollment}EventMessage (Published Language), Jwt.tenantId()/roles(),
                            OpaAuthorizer (queries OPA over HTTP)
-  course-management/      plain CRUD Course service + Ch.12 §7 hash-addressed, insert-only content versioning
+  course-management/      plain CRUD Course service + Ch.12 §7 hash-addressed, insert-only content versioning + OrgHierarchyClient (Ch.19-scoped create/publish)
   assignment-enrollment/  event-sourced Enrollment aggregate + REST API + outbox-backed Kafka producer/consumer
   assessment/              event-sourced Assessment aggregate + REST API + outbox-backed Kafka producer
   certification/           event-sourced Certificate aggregate (pins content version + signs it) + REST API + Kafka consumer + local signing + OrgHierarchyClient (Ch.19-scoped revocation)
@@ -411,30 +433,23 @@ doesn't publish.
 
 ## Next increments, in order
 
-1. **Extend org-scoping to the rest of the restricted actions.**
-   `revoke_certificate` proves the pattern works (real subtree, real 200/
-   403/200 across manager-in-scope, manager-out-of-scope, admin), but
-   `create_course`/`publish_course_version`/`org_unit_create`/
-   `org_unit_reparent` are all still tenant+role only — a `manager` can act
-   on any of those in their tenant regardless of org unit. Same mechanism
-   (resource gets an `org_unit_id`, controller resolves `caller_org_units`
-   via `OrgHierarchyClient.myScope()` when the caller isn't admin, Rego's
-   `org_ok` rule already generalizes), just needs repeating per action. This
-   is the top item now.
-2. Ch.19 §3/§4's event side: publish `OrgUnitChanged`/`OrgUnitReparented`
-   to Kafka via the outbox pattern, and give some service a reason to
-   consume them (ADR-032's 5-min TTL cache/fallback pattern needs a real
-   consumer to be worth building — right now `my-scope` is queried fresh,
-   uncached, on every org-scoped check, which is correct but not what §3
-   specifies).
-3. Multi-tenancy hybrid isolation (Ch.12 §2/Ch.18) — required before more
+1. **Ch.19 §3/§4's event side.** Publish `OrgUnitChanged`/
+   `OrgUnitReparented` to Kafka via the outbox pattern, and give some
+   service a reason to consume them — ADR-032's 5-min TTL cache/fallback
+   pattern needs a real consumer to be worth building. Right now every
+   org-scoped authorization check (revocation, course create/publish,
+   reparent) resolves `my-scope` fresh and uncached, every single time —
+   correct, but not what §3 specifies, and the more org-scoped actions pile
+   up (see item #12 in "What's proven"), the more that starts to matter for
+   latency, not just spec fidelity. This is the top item now.
+2. Multi-tenancy hybrid isolation (Ch.12 §2/Ch.18) — required before more
    than one real customer.
-4. Real KMS integration (Ch.40 §3), replacing `.local-kms/` — required
+3. Real KMS integration (Ch.40 §3), replacing `.local-kms/` — required
    before any certificate here means anything legally.
-5. Explicit outbox dedup/processed-message tracking on the consumer side,
+4. Explicit outbox dedup/processed-message tracking on the consumer side,
    tightening the "guards happen to make this safe" idempotency story noted
    above into something more deliberate.
-6. Learning Paths (Ch.21) as an actual multi-step concept, so the
+5. Learning Paths (Ch.21) as an actual multi-step concept, so the
    certificate's realized branch/step sequence (Ch.21 §7) has something real
    to record — content-version pinning is done, this is the remaining half
    of that chapter's requirement.

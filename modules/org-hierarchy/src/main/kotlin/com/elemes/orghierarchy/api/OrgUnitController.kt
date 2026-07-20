@@ -37,7 +37,14 @@ class OrgUnitController(
     private val authorizer: OpaAuthorizer,
 ) {
 
-    /** Ch.17 ADR-028: restricted to admin/manager, same tier as course creation — shaping the org is not a learner action. */
+    /**
+     * Ch.17 ADR-028: restricted to admin/manager, same tier as course
+     * creation — shaping the org is not a learner action. Deliberately NOT
+     * org-scoped (unlike reparent below): a new unit is always created
+     * unparented — there's no target org unit to check the caller's
+     * authority against yet, since attaching it anywhere is a separate,
+     * already-scoped `reparent` call.
+     */
     @PostMapping
     fun create(@AuthenticationPrincipal jwt: Jwt, @RequestBody request: CreateOrgUnitRequest): ResponseEntity<OrgUnitResponse> {
         authorizer.check(AuthzInput("org_unit_create", jwt.tenantId().value, jwt.roles()))
@@ -57,6 +64,14 @@ class OrgUnitController(
      * `hierarchyType` only — a unit's parent under a different hierarchyType
      * (e.g. "cost-center") is untouched, which is what makes matrixed
      * reporting (FR-009) possible.
+     *
+     * Ch.19 org-scoping: a manager (not admin) may only reparent a unit that
+     * sits inside their own managed subtree, and — if moving it under a new
+     * parent — that new parent must also be inside their subtree. Without
+     * the second check, a manager could "give away" part of the org into a
+     * hierarchy they don't control. `resourceOrgUnit` here is each unit's
+     * own id, not some separate owning-unit field — an org unit's "org
+     * scope" for this check is itself.
      */
     @PostMapping("/{id}/reparent")
     fun reparent(
@@ -65,10 +80,16 @@ class OrgUnitController(
         @RequestBody request: ReparentRequest,
     ): ResponseEntity<OrgUnitResponse> {
         val unit = loadOrThrow(id)
-        authorizer.check(AuthzInput("org_unit_reparent", jwt.tenantId().value, jwt.roles(), unit.tenantId))
+        val roles = jwt.roles()
+        val callerOrgUnits = resolveCallerScope(roles, jwt, request.hierarchyType)
+        authorizer.check(
+            AuthzInput("org_unit_reparent", jwt.tenantId().value, roles, unit.tenantId, callerOrgUnits, unit.orgUnitId.toString())
+        )
         if (request.newParentId != null) {
             val parent = loadOrThrow(request.newParentId)
-            authorizer.check(AuthzInput("org_unit_reparent", jwt.tenantId().value, jwt.roles(), parent.tenantId))
+            authorizer.check(
+                AuthzInput("org_unit_reparent", jwt.tenantId().value, roles, parent.tenantId, callerOrgUnits, parent.orgUnitId.toString())
+            )
         }
         repository.reparent(id, request.newParentId, request.hierarchyType)
         return ResponseEntity.ok(unit.toResponse())
@@ -110,14 +131,29 @@ class OrgUnitController(
     fun myScope(
         @AuthenticationPrincipal jwt: Jwt,
         @RequestParam(defaultValue = DEFAULT_HIERARCHY_TYPE) hierarchyType: String,
-    ): ResponseEntity<List<UUID>> {
-        val managerUserId = jwt.getClaimAsString("preferred_username") ?: return ResponseEntity.ok(emptyList())
+    ): ResponseEntity<List<UUID>> = ResponseEntity.ok(resolveScope(jwt, hierarchyType))
+
+    private fun resolveScope(jwt: Jwt, hierarchyType: String): List<UUID> {
+        val managerUserId = jwt.getClaimAsString("preferred_username") ?: return emptyList()
         val managed = repository.findManagedBy(managerUserId, jwt.tenantId().value)
-        val scope = managed.flatMap { repository.descendants(it.orgUnitId, hierarchyType) }
+        return managed.flatMap { repository.descendants(it.orgUnitId, hierarchyType) }
             .map { it.orgUnitId }
             .distinct()
-        return ResponseEntity.ok(scope)
     }
+
+    /**
+     * Only resolved for "manager" (not "admin") callers — admin always
+     * stays tenant-wide. Unlike Certification/Course Management's client of
+     * the same shape, this resolves in-process against the repository
+     * rather than over HTTP — org-hierarchy already owns this data, so a
+     * self-call would be pure overhead.
+     */
+    private fun resolveCallerScope(roles: List<String>, jwt: Jwt, hierarchyType: String): List<String> =
+        if ("admin" !in roles && "manager" in roles) {
+            resolveScope(jwt, hierarchyType).map { it.toString() }
+        } else {
+            emptyList()
+        }
 
     private fun loadOrThrow(id: UUID): OrgUnit = repository.findById(id) ?: throw OrgUnitNotFoundException(id)
 }
