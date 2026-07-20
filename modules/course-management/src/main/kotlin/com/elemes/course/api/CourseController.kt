@@ -1,5 +1,9 @@
 package com.elemes.course.api
 
+import com.elemes.common.AuthzInput
+import com.elemes.common.ForbiddenException
+import com.elemes.common.OpaAuthorizer
+import com.elemes.common.roles
 import com.elemes.course.ContentVersion
 import com.elemes.course.Course
 import com.elemes.course.infrastructure.CourseRepository
@@ -27,42 +31,57 @@ class ContentVersionNotFoundException(id: UUID) : RuntimeException("Content vers
 
 @RestController
 @RequestMapping("/api/v1/courses")
-class CourseController(private val repository: CourseRepository) {
+class CourseController(
+    private val repository: CourseRepository,
+    private val authorizer: OpaAuthorizer,
+) {
 
+    /** Ch.17 ADR-028: restricted to admin/manager — a learner authenticating successfully is not enough to author content. */
     @PostMapping
     fun create(@AuthenticationPrincipal jwt: Jwt, @RequestBody request: CreateCourseRequest): ResponseEntity<CourseResponse> {
         val tenantId = jwt.getClaimAsString("tenant_id") ?: error("JWT is missing the required tenant_id claim")
+        authorizer.check(AuthzInput("create_course", tenantId, jwt.roles()))
         val course = repository.create(UUID.randomUUID(), tenantId, request.code, request.title, request.initialContentHash)
         return ResponseEntity.status(HttpStatus.CREATED).body(course.toResponse())
     }
 
-    // Ch.17 Authorization (not yet built) is what would verify the caller's
-    // tenant matches the resource being read here — Phase A only establishes
-    // *who* is calling, not *what tenant-scoped access* they should have.
-    // Every endpoint below still requires a valid token (SecurityConfig),
-    // just doesn't cross-check it against the resource's tenant yet.
-
     @GetMapping("/{id}")
-    fun get(@PathVariable id: UUID): ResponseEntity<CourseResponse> =
-        ResponseEntity.ok(loadOrThrow(id).toResponse())
+    fun get(@AuthenticationPrincipal jwt: Jwt, @PathVariable id: UUID): ResponseEntity<CourseResponse> {
+        val course = loadOrThrow(id)
+        authorizer.check(AuthzInput("read_course", jwt.getClaimAsString("tenant_id") ?: "", jwt.roles(), course.tenantId))
+        return ResponseEntity.ok(course.toResponse())
+    }
 
-    /** Ch.12 §7: publishing a version never touches or invalidates prior versions. */
+    /** Ch.12 §7: publishing a version never touches or invalidates prior versions. Also admin/manager-restricted. */
     @PostMapping("/{id}/versions")
-    fun publishVersion(@PathVariable id: UUID, @RequestBody request: PublishVersionRequest): ResponseEntity<ContentVersionResponse> {
+    fun publishVersion(
+        @AuthenticationPrincipal jwt: Jwt,
+        @PathVariable id: UUID,
+        @RequestBody request: PublishVersionRequest,
+    ): ResponseEntity<ContentVersionResponse> {
+        val course = loadOrThrow(id)
+        authorizer.check(AuthzInput("publish_course_version", jwt.getClaimAsString("tenant_id") ?: "", jwt.roles(), course.tenantId))
         val version = repository.publishNewVersion(id, request.contentHash) ?: throw CourseNotFoundException(id)
         return ResponseEntity.status(HttpStatus.CREATED).body(version.toResponse())
     }
 
     @GetMapping("/{id}/current-version")
-    fun currentVersion(@PathVariable id: UUID): ResponseEntity<ContentVersionResponse> {
-        loadOrThrow(id)
+    fun currentVersion(@AuthenticationPrincipal jwt: Jwt, @PathVariable id: UUID): ResponseEntity<ContentVersionResponse> {
+        val course = loadOrThrow(id)
+        authorizer.check(AuthzInput("read_course", jwt.getClaimAsString("tenant_id") ?: "", jwt.roles(), course.tenantId))
         val version = repository.findCurrentVersion(id) ?: throw CourseNotFoundException(id)
         return ResponseEntity.ok(version.toResponse())
     }
 
     /** Historical lookup — proves an old version is still reachable after being superseded. */
     @GetMapping("/{id}/versions/{versionId}")
-    fun version(@PathVariable id: UUID, @PathVariable versionId: UUID): ResponseEntity<ContentVersionResponse> {
+    fun version(
+        @AuthenticationPrincipal jwt: Jwt,
+        @PathVariable id: UUID,
+        @PathVariable versionId: UUID,
+    ): ResponseEntity<ContentVersionResponse> {
+        val course = loadOrThrow(id)
+        authorizer.check(AuthzInput("read_course", jwt.getClaimAsString("tenant_id") ?: "", jwt.roles(), course.tenantId))
         val version = repository.findVersionById(versionId)?.takeIf { it.courseId == id } ?: throw ContentVersionNotFoundException(versionId)
         return ResponseEntity.ok(version.toResponse())
     }
@@ -78,4 +97,8 @@ class CourseExceptionHandler {
     @ExceptionHandler(CourseNotFoundException::class, ContentVersionNotFoundException::class)
     fun handleNotFound(ex: RuntimeException): ResponseEntity<Map<String, String>> =
         ResponseEntity.status(HttpStatus.NOT_FOUND).body(mapOf("error" to (ex.message ?: "not found")))
+
+    @ExceptionHandler(ForbiddenException::class)
+    fun handleForbidden(ex: ForbiddenException): ResponseEntity<Map<String, String>> =
+        ResponseEntity.status(HttpStatus.FORBIDDEN).body(mapOf("error" to (ex.message ?: "forbidden")))
 }

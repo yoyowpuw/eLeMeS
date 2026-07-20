@@ -10,3 +10,10 @@ import org.springframework.security.oauth2.jwt.Jwt
  */
 fun Jwt.tenantId(): TenantId =
     TenantId(getClaimAsString("tenant_id") ?: error("JWT is missing the required tenant_id claim"))
+
+/** Keycloak nests realm roles under `realm_access.roles`, not a flat claim — this is the one place that's unpacked. */
+@Suppress("UNCHECKED_CAST")
+fun Jwt.roles(): List<String> {
+    val realmAccess = getClaim<Map<String, Any>>("realm_access") ?: return emptyList()
+    return (realmAccess["roles"] as? List<String>) ?: emptyList()
+}

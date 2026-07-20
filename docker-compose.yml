@@ -73,6 +73,19 @@ services:
     volumes:
       - ./infra/keycloak/realm-export.json:/opt/keycloak/data/import/realm-export.json:ro
 
+  # Ch.17 ADR-028: OPA-class policy-as-code engine. Production topology is a
+  # sidecar per service; locally, one shared instance is queried over HTTP by
+  # all four services — see infra/opa/policies/authz.rego for the actual
+  # policy (tenant isolation + role checks).
+  opa:
+    image: openpolicyagent/opa:0.68.0
+    container_name: elemes-opa
+    command: ["run", "--server", "--addr=0.0.0.0:8181", "/policies"]
+    ports:
+      - "8181:8181"
+    volumes:
+      - ./infra/opa/policies:/policies:ro
+
 volumes:
   postgres_data:
   minio_data:

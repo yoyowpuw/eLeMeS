@@ -1,5 +1,9 @@
 package com.elemes.enrollment.api
 
+import com.elemes.common.AuthzInput
+import com.elemes.common.ForbiddenException
+import com.elemes.common.OpaAuthorizer
+import com.elemes.common.roles
 import com.elemes.common.tenantId
 import com.elemes.enrollment.Enrollment
 import com.elemes.enrollment.infrastructure.CourseManagementClient
@@ -36,10 +40,12 @@ class InvalidCourseException(courseId: String) : RuntimeException("Course $cours
 class EnrollmentController(
     private val repository: EnrollmentRepository,
     private val courseManagementClient: CourseManagementClient,
+    private val authorizer: OpaAuthorizer,
 ) {
 
     @PostMapping
     fun enroll(@AuthenticationPrincipal jwt: Jwt, @RequestBody request: EnrollLearnerRequest): ResponseEntity<EnrollmentResponse> {
+        authorizer.check(AuthzInput("create_enrollment", jwt.tenantId().value, jwt.roles()))
         // Ch.5 ADR-005 / Ch.21 §7: the CURRENT version at enrollment time is
         // fetched once here and pinned for good — never re-queried later,
         // even if the course is republished before this learner finishes.
@@ -54,24 +60,30 @@ class EnrollmentController(
     }
 
     @PostMapping("/{id}/start")
-    fun start(@PathVariable id: UUID): ResponseEntity<EnrollmentResponse> = mutate(id) { it.start() }
+    fun start(@AuthenticationPrincipal jwt: Jwt, @PathVariable id: UUID): ResponseEntity<EnrollmentResponse> =
+        mutate(jwt, id) { it.start() }
 
     @PostMapping("/{id}/progress")
-    fun progress(@PathVariable id: UUID, @RequestBody request: ProgressRequest): ResponseEntity<EnrollmentResponse> =
-        mutate(id) { it.recordProgress(request.percentComplete) }
+    fun progress(
+        @AuthenticationPrincipal jwt: Jwt,
+        @PathVariable id: UUID,
+        @RequestBody request: ProgressRequest,
+    ): ResponseEntity<EnrollmentResponse> = mutate(jwt, id) { it.recordProgress(request.percentComplete) }
 
     @PostMapping("/{id}/complete")
-    fun complete(@PathVariable id: UUID): ResponseEntity<EnrollmentResponse> = mutate(id) { it.complete() }
+    fun complete(@AuthenticationPrincipal jwt: Jwt, @PathVariable id: UUID): ResponseEntity<EnrollmentResponse> =
+        mutate(jwt, id) { it.complete() }
 
     @GetMapping("/{id}")
-    fun get(@PathVariable id: UUID): ResponseEntity<EnrollmentResponse> =
-        ResponseEntity.ok(loadOrThrow(id).toResponse())
-
-    // Ch.17 Authorization (not yet built) is what would verify the caller's
-    // tenant/role matches this enrollment — Phase A only requires *a* valid
-    // token (enforced globally by SecurityConfig), not tenant-scoped access.
-    private fun mutate(id: UUID, action: (Enrollment) -> Unit): ResponseEntity<EnrollmentResponse> {
+    fun get(@AuthenticationPrincipal jwt: Jwt, @PathVariable id: UUID): ResponseEntity<EnrollmentResponse> {
         val enrollment = loadOrThrow(id)
+        authorizer.check(AuthzInput("read_enrollment", jwt.tenantId().value, jwt.roles(), enrollment.tenantId.value))
+        return ResponseEntity.ok(enrollment.toResponse())
+    }
+
+    private fun mutate(jwt: Jwt, id: UUID, action: (Enrollment) -> Unit): ResponseEntity<EnrollmentResponse> {
+        val enrollment = loadOrThrow(id)
+        authorizer.check(AuthzInput("read_enrollment", jwt.tenantId().value, jwt.roles(), enrollment.tenantId.value))
         action(enrollment)
         repository.save(enrollment)
         return ResponseEntity.ok(enrollment.toResponse())

@@ -17,6 +17,7 @@ dependencies {
     implementation("org.slf4j:slf4j-api")
     implementation("org.springframework.security:spring-security-oauth2-resource-server")
     implementation("org.springframework.security:spring-security-oauth2-jose")
+    implementation("org.springframework:spring-web")
 
     testImplementation(kotlin("test"))
 }

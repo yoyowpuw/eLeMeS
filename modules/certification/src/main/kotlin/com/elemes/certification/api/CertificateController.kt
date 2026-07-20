@@ -4,8 +4,15 @@ import com.elemes.certification.Certificate
 import com.elemes.certification.CertificatePayload
 import com.elemes.certification.infrastructure.CertificateRepository
 import com.elemes.certification.infrastructure.LocalSigningService
+import com.elemes.common.AuthzInput
+import com.elemes.common.ForbiddenException
+import com.elemes.common.OpaAuthorizer
+import com.elemes.common.roles
+import com.elemes.common.tenantId
 import org.springframework.http.HttpStatus
 import org.springframework.http.ResponseEntity
+import org.springframework.security.core.annotation.AuthenticationPrincipal
+import org.springframework.security.oauth2.jwt.Jwt
 import org.springframework.web.bind.annotation.ExceptionHandler
 import org.springframework.web.bind.annotation.GetMapping
 import org.springframework.web.bind.annotation.PathVariable
@@ -38,18 +45,30 @@ class NoCertificateForEnrollmentException(enrollmentId: UUID) : RuntimeException
 class CertificateController(
     private val repository: CertificateRepository,
     private val signingService: LocalSigningService,
+    private val authorizer: OpaAuthorizer,
 ) {
 
     @GetMapping("/{id}")
-    fun get(@PathVariable id: UUID): ResponseEntity<CertificateResponse> = ResponseEntity.ok(loadOrThrow(id).toResponse())
-
-    @GetMapping("/by-enrollment/{enrollmentId}")
-    fun getByEnrollment(@PathVariable enrollmentId: UUID): ResponseEntity<CertificateResponse> {
-        val certificateId = repository.findByEnrollmentId(enrollmentId) ?: throw NoCertificateForEnrollmentException(enrollmentId)
-        return ResponseEntity.ok(loadOrThrow(certificateId).toResponse())
+    fun get(@AuthenticationPrincipal jwt: Jwt, @PathVariable id: UUID): ResponseEntity<CertificateResponse> {
+        val certificate = loadOrThrow(id)
+        authorizer.check(AuthzInput("read_certificate", jwt.tenantId().value, jwt.roles(), certificate.tenantId.value))
+        return ResponseEntity.ok(certificate.toResponse())
     }
 
-    /** Ch.26 §6: independently verifiable without platform access, given only the public key. */
+    @GetMapping("/by-enrollment/{enrollmentId}")
+    fun getByEnrollment(@AuthenticationPrincipal jwt: Jwt, @PathVariable enrollmentId: UUID): ResponseEntity<CertificateResponse> {
+        val certificateId = repository.findByEnrollmentId(enrollmentId) ?: throw NoCertificateForEnrollmentException(enrollmentId)
+        val certificate = loadOrThrow(certificateId)
+        authorizer.check(AuthzInput("read_certificate", jwt.tenantId().value, jwt.roles(), certificate.tenantId.value))
+        return ResponseEntity.ok(certificate.toResponse())
+    }
+
+    /**
+     * Ch.26 §6: independently verifiable without platform access, given only
+     * the public key — deliberately NOT gated by OPA/auth at all (see
+     * SecurityConfig). No `@AuthenticationPrincipal` here since a caller may
+     * have no token whatsoever.
+     */
     @GetMapping("/{id}/verify")
     fun verify(@PathVariable id: UUID): ResponseEntity<VerifyResponse> {
         val certificate = loadOrThrow(id)
@@ -60,9 +79,15 @@ class CertificateController(
         return ResponseEntity.ok(VerifyResponse(signingService.verify(payload, certificate.signature)))
     }
 
+    /** Ch.17 ADR-028: revocation is admin-only — the highest-consequence mutation this service exposes. */
     @PostMapping("/{id}/revoke")
-    fun revoke(@PathVariable id: UUID, @RequestBody request: RevokeRequest): ResponseEntity<CertificateResponse> {
+    fun revoke(
+        @AuthenticationPrincipal jwt: Jwt,
+        @PathVariable id: UUID,
+        @RequestBody request: RevokeRequest,
+    ): ResponseEntity<CertificateResponse> {
         val certificate = loadOrThrow(id)
+        authorizer.check(AuthzInput("revoke_certificate", jwt.tenantId().value, jwt.roles(), certificate.tenantId.value))
         certificate.revoke(request.reason)
         repository.save(certificate)
         return ResponseEntity.ok(certificate.toResponse())
@@ -84,6 +109,10 @@ class CertificateExceptionHandler {
     @ExceptionHandler(CertificateNotFoundException::class, NoCertificateForEnrollmentException::class)
     fun handleNotFound(ex: RuntimeException): ResponseEntity<Map<String, String>> =
         ResponseEntity.status(HttpStatus.NOT_FOUND).body(mapOf("error" to (ex.message ?: "not found")))
+
+    @ExceptionHandler(ForbiddenException::class)
+    fun handleForbidden(ex: ForbiddenException): ResponseEntity<Map<String, String>> =
+        ResponseEntity.status(HttpStatus.FORBIDDEN).body(mapOf("error" to (ex.message ?: "forbidden")))
 
     @ExceptionHandler(IllegalStateException::class)
     fun handleInvalid(ex: RuntimeException): ResponseEntity<Map<String, String>> =

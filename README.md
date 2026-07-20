@@ -86,6 +86,21 @@ Spring Boot services:
    required — gating them would have directly contradicted Chapter 26 §6's
    requirement that a certificate be verifiable by a third party *without*
    platform access.
+9. **Authorization is real too now — both role checks and cross-tenant
+   denial**, enforced by every service querying a shared OPA policy (Ch.17
+   ADR-028), not just authentication. Proven with seven distinct HTTP-level
+   cases, not just direct policy queries: a `learner` token gets a genuine
+   403 trying to create a course; an `admin` token succeeds; a token from
+   `globex-corp` gets 403 reading a course that belongs to `acme-corp`; the
+   same course is readable by an `acme-corp` token; the full golden path
+   (enroll → assessment → certificate) still works end to end with
+   authorization active; a `learner` gets 403 trying to revoke a
+   certificate while `admin` succeeds; and `/verify` still needs no token
+   at all throughout. One real bug surfaced and got fixed along the way:
+   Rego's `not` only treats a field as falsy when it's genuinely *absent*,
+   not when it's JSON `null` — and Jackson serializes Kotlin `null` as an
+   explicit `null`, not an omitted field, so the original "no resource yet"
+   policy branch silently never matched until this was corrected.
 
 ## Tech stack (per the AKB's ADRs)
 
@@ -98,22 +113,25 @@ Spring Boot services:
 | Key management | Cloud HSM/KMS (Ch.40 ADR-066) | **Local RSA keypair**, file-persisted under `.local-kms/` (gitignored) — see deferred items |
 | Object storage | S3-compatible (Ch.28 ADR-045) | MinIO in docker-compose — provisioned, still unused |
 | Identity/Auth | Bought CIAM platform (Ch.16 ADR-026) | **Keycloak** — real OIDC, `tenant_id` custom claim, wired into all four services as OAuth2 Resource Servers |
+| Authorization | Policy-as-code, OPA-class (Ch.17 ADR-028) | **Open Policy Agent** — one shared container locally (per-service sidecar in production), queried over HTTP by all four services; Rego policy in `infra/opa/policies/authz.rego` |
 
 ## Deliberately deferred (read this before assuming a gap is a bug)
 
-- **Authentication is real; authorization is not.** Every endpoint requires a
-  valid Keycloak token and derives `tenant_id` from it — but nothing yet
-  checks *what* an authenticated caller is allowed to do or *which tenant's*
-  data they should be scoped to beyond what they supply. A valid `acme-corp`
-  token can currently read/act on data belonging to any tenant if it knows
-  the ID — Chapter 17's OPA-based policy layer and per-resource tenant
-  cross-checks are what's still missing, not authentication itself. Still
-  not ASVS-conformant end to end, but the authentication half is real now.
-- **No Org Hierarchy (Ch.19), no roles enforced.** Keycloak issues
-  `learner`/`manager`/`admin` realm roles (see `infra/keycloak/realm-export.json`)
-  but no service checks them yet — every authenticated caller can hit every
-  endpoint regardless of role. Ch.19's closure-table org model doesn't exist
-  as a service either.
+- **Authentication and authorization are both real now.** Every endpoint
+  requires a valid Keycloak token, `tenant_id` is derived from it, and every
+  service checks the caller's tenant and role against a shared OPA policy
+  (Ch.17 ADR-028) before acting — see "What's proven" #9. What's still
+  missing is *granularity*: today's Rego policy is a flat tenant-match plus
+  a handful of hardcoded role-to-action rules, not a real policy management
+  surface, and there's no per-resource ownership check finer than "same
+  tenant" (e.g. a `manager` can act on any resource in their tenant, not
+  just ones they were assigned).
+- **No Org Hierarchy (Ch.19).** Keycloak issues `learner`/`manager`/`admin`
+  realm roles (see `infra/keycloak/realm-export.json`) and they're now
+  enforced for the handful of restricted actions (course creation/publish,
+  certificate revocation) — but Ch.19's closure-table org model, and any
+  notion of management scope *within* a tenant, doesn't exist as a service
+  yet.
 - **Certificate-signing key is a local file, not an HSM/KMS.** `.local-kms/`
   holds a plaintext RSA private key. It is persisted across restarts purely
   so local demo certificates keep verifying — this has zero of the protection
@@ -158,6 +176,17 @@ must be recreated (`docker compose rm -sf keycloak && docker compose up -d
 keycloak`) — `--import-realm` uses an IGNORE_EXISTING strategy and won't
 re-apply changes to an already-imported realm on a simple restart.
 
+**A Rego gotcha worth knowing about too:** `not input.some_field` in Rego
+only succeeds when the field is genuinely *undefined* (the key is absent
+from the JSON), not when it's present with value `null`. Jackson serializes
+a Kotlin `null` as an explicit JSON `null`, not an omitted key, so a policy
+rule written as `tenant_ok if { not input.resource_tenant }` silently never
+matched for "no resource yet" requests coming from a Kotlin service — it had
+to be paired with an explicit `input.resource_tenant == null` rule. Caught
+by testing the policy directly against OPA's HTTP API with `curl` before
+suspecting the Kotlin side at all; worth doing that first if a policy seems
+to be denying something it shouldn't.
+
 ## Running locally
 
 Prerequisites: Docker Desktop (WSL2 backend), JDK 21 (services target it via
@@ -166,7 +195,7 @@ Gradle toolchain regardless of your system `JAVA_HOME`).
 ```bash
 # 1. Start infra (Keycloak's realm/client/users auto-import at startup —
 #    give it a few seconds before requesting a token)
-docker compose up -d postgres redpanda keycloak
+docker compose up -d postgres redpanda keycloak opa
 
 # 2. Run all four services (each in its own terminal, or backgrounded)
 JAVA_HOME="/path/to/jdk-21" ./gradlew :modules:course-management:bootRun
@@ -208,6 +237,15 @@ curl -X POST localhost:8082/api/v1/assessments/$ASM_ID/submit \
 curl localhost:8084/api/v1/certificates/by-enrollment/$ENR_ID -H "Authorization: Bearer $TOKEN"
 # -> grab the certificateId, then verify WITHOUT a token — deliberately public per Ch.26 §6:
 curl localhost:8084/api/v1/certificates/{certificateId}/verify   # {"valid":true}
+
+# 5. OPA denies what it should. learner1 can't create a course (403):
+curl -i -X POST localhost:8083/api/v1/courses \
+  -H "Content-Type: application/json" -H "Authorization: Bearer $TOKEN" \
+  -d '{"code":"SEC-102","title":"Nope","initialContentHash":"sha256-placeholder"}'
+# -> 403 Forbidden. Get an admin1 token instead (same password grant, username=admin1)
+# and it succeeds. A token for learner-other-tenant (tenant "globex-corp",
+# password learner-other-tenant) gets 403 reading $COURSE_ID above, since it
+# belongs to "acme-corp".
 ```
 
 ### Running the test suite
@@ -237,13 +275,15 @@ that, or run the test suite from inside WSL2 directly.
 modules/
   common/                 shared kernel: TenantId, EventStore, GenericJdbcEventStore,
                            EventSourcedAggregate, JdbcOutboxStore + OutboxPoller (transactional outbox),
-                           {Assessment,Enrollment}EventMessage (Published Language), Jwt.tenantId()
+                           {Assessment,Enrollment}EventMessage (Published Language), Jwt.tenantId()/roles(),
+                           OpaAuthorizer (queries OPA over HTTP)
   course-management/      plain CRUD Course service + Ch.12 §7 hash-addressed, insert-only content versioning
   assignment-enrollment/  event-sourced Enrollment aggregate + REST API + outbox-backed Kafka producer/consumer
   assessment/              event-sourced Assessment aggregate + REST API + outbox-backed Kafka producer
   certification/           event-sourced Certificate aggregate (pins content version + signs it) + REST API + Kafka consumer + local signing
 infra/keycloak/           realm-export.json — auto-imported realm, client, tenant_id claim mapper, seeded users
-docker-compose.yml        Postgres, Redpanda, Keycloak (all used); MinIO (provisioned, unused)
+infra/opa/policies/       authz.rego — tenant isolation + role-based restricted-action rules (Ch.17 ADR-028)
+docker-compose.yml        Postgres, Redpanda, Keycloak, OPA (all used); MinIO (provisioned, unused)
 docs/akb/                 the 50-chapter Architecture Knowledge Base
 ```
 
@@ -251,7 +291,11 @@ Every service has its own `infrastructure/SecurityConfig.kt`: requires a
 valid Keycloak-issued JWT on every endpoint except `/actuator/**` (and, in
 Certification's case, the two endpoints Ch.26 §6 requires to stay public).
 The shared `Jwt.tenantId()` extension in `common` is the one place the
-`tenant_id` claim is read, so every service extracts it identically.
+`tenant_id` claim is read, so every service extracts it identically. Each
+service also has an `infrastructure/AuthorizationConfig.kt` providing an
+`OpaAuthorizer` bean (shared class in `common`, just the base URL differs),
+which every controller calls before mutating or reading a resource — see
+the Rego policy for the actual allow/deny rules.
 
 Each service owns its own Postgres **schema** on the one shared local
 Postgres instance — genuine per-context data ownership (Ch.11) without
@@ -274,12 +318,13 @@ doesn't publish.
 
 ## Next increments, in order
 
-1. **Authorization** (Ch.17 — OPA-class policy-as-code, local sidecar) and
-   **Org Hierarchy** (Ch.19 — closure-table model, new service). Real
-   authentication (previous item) is done; nothing yet stops an
-   authenticated `acme-corp` caller from reading/acting on another tenant's
-   resources, or enforces the `learner`/`manager`/`admin` roles Keycloak
-   already issues. This is the top item now.
+1. **Org Hierarchy** (Ch.19 — closure-table model, new service).
+   Authorization itself (previous item) is done: role checks and
+   cross-tenant denial are both real and proven (see "What's proven" #9).
+   What's still missing is any notion of structure *within* a tenant — a
+   `manager` can currently act on any resource in their own tenant, with no
+   concept of which org unit or team they actually manage. This is the top
+   item now.
 2. Multi-tenancy hybrid isolation (Ch.12 §2/Ch.18) — required before more
    than one real customer.
 3. Real KMS integration (Ch.40 §3), replacing `.local-kms/` — required
