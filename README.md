@@ -227,6 +227,45 @@ Spring Boot services:
     staleness risk (a manager who just lost authority over a unit could
     still reparent it for up to the cache's TTL) with no resilience benefit
     to offset it, since there's no outage to survive in the first place.
+15. **PostgreSQL Row-Level Security is real, defense-in-depth beneath the
+    application layer — proven by directly querying Postgres, not just by
+    reading the policy SQL.** Ch.12 §2's pooled-cluster isolation model is
+    now enforced by the database itself, not only by each controller's own
+    query logic — which matters concretely here, since several repository
+    methods (`CourseRepository.findById()` among them) never filter by
+    `tenant_id` in their `WHERE` clause at all; they relied entirely on the
+    OPA check running afterward. A real bug was caught building this, not
+    just a hypothetical one: the app's own connecting role (`elemes`,
+    `POSTGRES_USER`'s bootstrap account) turned out to be a Postgres
+    **superuser**, and superusers bypass row security unconditionally —
+    `FORCE ROW LEVEL SECURITY` is powerless against that, by Postgres
+    design. First proof attempt against that role silently returned every
+    row with no tenant context set at all. Fixed by adding a dedicated,
+    non-superuser `elemes_app` role (`infra/postgres/init-app-role.sql`)
+    that every service now actually connects as — re-tested and confirmed:
+    connecting directly via `psql` as that exact role, with no
+    `app.tenant_id` session variable set, returned **zero rows** for a
+    course that had just been created moments earlier over the real API;
+    setting it to the wrong tenant also returned zero rows and a raw
+    `UPDATE` under the wrong tenant affected zero rows; setting it to the
+    correct tenant returned the real data. The full golden path was re-run
+    afterward to confirm nothing broke, including the one deliberate
+    exception — Certification's `/verify` (Ch.26 §6, no token, therefore no
+    tenant) calls `TenantContext.setBypass()`, its one legitimate call
+    site, and still resolved a real certificate with no token at all. Kafka
+    consumer threads (`EnrollmentEventListener`, `AssessmentEventListener`)
+    needed their own fix too — they don't go through the HTTP request that
+    normally sets tenant context, so each now sets it explicitly from the
+    message's own `tenantId` field before touching the database.
+    **One behavior change surfaced by this testing, not previously true:**
+    a cross-tenant single-resource read (e.g. `globex-corp` reading an
+    `acme-corp` course or org unit by ID) now returns **404, not 403** —
+    RLS filters the row out before `repository.findById()` ever returns
+    it, so the code never reaches the OPA check that used to be what
+    produced the 403. Arguably a stronger property (a caller outside the
+    tenant can no longer even prove the resource exists), but a genuine,
+    observable change from what was documented in items #9–10 above for
+    those specific single-resource GET endpoints.
 
 ## Tech stack (per the AKB's ADRs)
 
@@ -297,8 +336,15 @@ Spring Boot services:
   pinning is (see "What's proven" #7), but there's no multi-step path to
   record a realized sequence *through* yet.
 - **No idempotency-key handling** (Ch.13 §4) on mutation endpoints yet.
-- **Single tenant, pooled-only.** Chapter 12 §2's hybrid silo/pool model and
-  Chapter 18's control plane don't exist yet.
+- **Pooled-tier data-plane isolation is real (RLS, see "What's proven" #15);
+  the rest of Ch.12 §2/Ch.18 isn't.** Every pooled tenant currently shares
+  the same Postgres cluster with database-enforced row isolation — but the
+  **silo tier** (dedicated cluster for tenants over the size/regulatory
+  threshold) doesn't exist, there's no **control plane** (Ch.18 — tenant
+  registry, provisioning workflow, config, offboarding) as its own
+  service, and there's genuinely only one tenant's worth of real data in
+  this environment regardless (`acme-corp`/`globex-corp` are both just
+  rows in the same pooled cluster, not separate infrastructure).
 - **Testcontainers integration test is broken on this machine** — see below.
 
 **Operational gotcha worth knowing about:** if you experiment with schema
@@ -335,6 +381,21 @@ by testing the policy directly against OPA's HTTP API with `curl` before
 suspecting the Kotlin side at all; worth doing that first if a policy seems
 to be denying something it shouldn't.
 
+**A Postgres RLS gotcha that's easy to miss entirely:** `FORCE ROW LEVEL
+SECURITY` on a table does **not** apply to a Postgres superuser, no matter
+what — superusers bypass row security unconditionally, by design, and
+there is no table-level setting that overrides that. The Docker Postgres
+image's `POSTGRES_USER` bootstrap account **is** a superuser by default.
+If every service connects as that account (as this repo originally did),
+every RLS policy in it is a no-op that looks correct in the migration SQL
+and in `\d+ tablename`, and will keep looking correct until someone
+actually queries the table directly as that role and notices all tenants'
+rows come back. Fixed here by adding a dedicated non-superuser
+`elemes_app` role (`infra/postgres/init-app-role.sql`) that every service
+connects as instead — `select rolsuper, rolbypassrls from pg_roles` is the
+one-line check that would have caught this immediately, worth running
+before trusting any RLS setup against a role you didn't create yourself.
+
 ## Running locally
 
 Prerequisites: Docker Desktop (WSL2 backend), JDK 21 (services target it via
@@ -342,7 +403,13 @@ Gradle toolchain regardless of your system `JAVA_HOME`).
 
 ```bash
 # 1. Start infra (Keycloak's realm/client/users auto-import at startup —
-#    give it a few seconds before requesting a token)
+#    give it a few seconds before requesting a token). On a genuinely fresh
+#    postgres_data volume this also auto-creates the elemes_app role every
+#    service connects as (infra/postgres/init-app-role.sql) — on an EXISTING
+#    volume from before this role existed, run this once manually instead:
+#    docker exec elemes-postgres psql -U elemes -d elemes -c \
+#      "create role elemes_app with login password 'elemes_app_local_dev'; \
+#       grant create, connect on database elemes to elemes_app;"
 docker compose up -d postgres redpanda keycloak opa
 
 # 2. Run all five services (each in its own terminal, or backgrounded)
@@ -458,8 +525,9 @@ that, or run the test suite from inside WSL2 directly.
 modules/
   common/                 shared kernel: TenantId, EventStore, GenericJdbcEventStore,
                            EventSourcedAggregate, JdbcOutboxStore + OutboxPoller (transactional outbox),
-                           {Assessment,Enrollment}EventMessage (Published Language), Jwt.tenantId()/roles(),
-                           OpaAuthorizer (queries OPA over HTTP)
+                           {Assessment,Enrollment,OrgUnit}EventMessage (Published Language), Jwt.tenantId()/roles(),
+                           OpaAuthorizer (queries OPA over HTTP), TenantContext + TenantAwareDataSource +
+                           TenantContextFilter + TenantDataSourceConfig (Ch.12 §2 Postgres RLS wiring)
   course-management/      plain CRUD Course service + Ch.12 §7 hash-addressed, insert-only content versioning + OrgScopeCache (Ch.19 ADR-032, 5-min TTL, fail-closed) + Kafka consumer for cache invalidation
   assignment-enrollment/  event-sourced Enrollment aggregate + REST API + outbox-backed Kafka producer/consumer
   assessment/              event-sourced Assessment aggregate + REST API + outbox-backed Kafka producer
@@ -467,6 +535,7 @@ modules/
   org-hierarchy/           plain CRUD OrgUnit service + Ch.19 §2 PostgreSQL closure-table hierarchy model (multiple concurrent hierarchy types, re-parenting) + outbox-backed Kafka producer
 infra/keycloak/           realm-export.json — auto-imported realm, client, tenant_id claim mapper, seeded users
 infra/opa/policies/       authz.rego — tenant isolation + role-based restricted-action rules (Ch.17 ADR-028)
+infra/postgres/           init-app-role.sql — creates the non-superuser elemes_app role RLS depends on (Ch.12 §2)
 docker-compose.yml        Postgres, Redpanda, Keycloak, OPA (all used); MinIO (provisioned, unused)
 docs/akb/                 the 50-chapter Architecture Knowledge Base
 ```
@@ -502,17 +571,12 @@ doesn't publish.
 
 ## Next increments, in order
 
-1. **Multi-tenancy hybrid isolation** (Ch.12 §2/Ch.18) — required before
-   more than one real customer. Everything in this codebase now correctly
-   assumes a single pooled tenant model; Ch.18's control plane and the
-   silo option don't exist yet. This is the top item now — the Ch.19 org-
-   scoping + caching thread (creation, authoring, revocation, event
-   publishing, ADR-032 caching with proper fail-closed semantics, and a
-   real bug caught by outage testing) is a coherent, closed arc as of
-   "What's proven" #10–14; the one intentionally-open piece left in it
-   (org-unit membership as a bare `managerUserId` field, no real HRIS
-   sync) isn't worth chasing further without a real directory-sync
-   requirement driving it.
+1. **Ch.18's control plane** (tenant registry, provisioning workflow,
+   config, offboarding) as its own service, and the **silo tier** for
+   large/regulated tenants — the pooled-tier *data-plane* isolation half of
+   Ch.12 §2 is done and proven with a real RLS bypass/round-trip test (see
+   "What's proven" #15); what's left is everything Ch.18 actually owns.
+   This is the top item now.
 2. Real KMS integration (Ch.40 §3), replacing `.local-kms/` — required
    before any certificate here means anything legally.
 3. Explicit outbox dedup/processed-message tracking on the consumer side,

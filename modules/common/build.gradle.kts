@@ -18,6 +18,9 @@ dependencies {
     implementation("org.springframework.security:spring-security-oauth2-resource-server")
     implementation("org.springframework.security:spring-security-oauth2-jose")
     implementation("org.springframework:spring-web")
+    // Servlet API only: needed for TenantContextFilter's HttpServletRequest/Response
+    // types. Provided at runtime by each consuming service's embedded Tomcat.
+    compileOnly("jakarta.servlet:jakarta.servlet-api")
 
     testImplementation(kotlin("test"))
 }

@@ -4,6 +4,7 @@ import com.elemes.certification.Certificate
 import com.elemes.certification.CertificatePayload
 import com.elemes.common.EnrollmentEventMessage
 import com.elemes.common.EnrollmentEventTopics
+import com.elemes.common.TenantContext
 import com.elemes.common.TenantId
 import org.slf4j.LoggerFactory
 import org.springframework.kafka.annotation.KafkaListener
@@ -29,35 +30,44 @@ class EnrollmentEventListener(
     fun onEnrollmentEvent(message: EnrollmentEventMessage) {
         if (message.eventType !in completionEventTypes) return
 
-        // Idempotency guard: at-least-once delivery + the unique constraint on
-        // certificate_projection.enrollment_id both protect against issuing
-        // two certificates for one enrollment.
-        if (repository.findByEnrollmentId(message.enrollmentId) != null) {
-            log.info("Certificate already exists for enrollment {}, ignoring duplicate completion event", message.enrollmentId)
-            return
+        // Ch.12 §2: this runs on a Kafka consumer thread, not an HTTP request
+        // thread, so TenantContextFilter never ran — there's no JWT to read
+        // tenant_id from here, only the message's own field. Must be set
+        // before any DB access below, or Postgres RLS blocks all of it.
+        TenantContext.set(message.tenantId)
+        try {
+            // Idempotency guard: at-least-once delivery + the unique constraint on
+            // certificate_projection.enrollment_id both protect against issuing
+            // two certificates for one enrollment.
+            if (repository.findByEnrollmentId(message.enrollmentId) != null) {
+                log.info("Certificate already exists for enrollment {}, ignoring duplicate completion event", message.enrollmentId)
+                return
+            }
+
+            val certificateId = UUID.randomUUID()
+            val issuedAt = Instant.now()
+            val payload = CertificatePayload.canonical(
+                certificateId, message.tenantId, message.enrollmentId, message.learnerId,
+                message.courseId, message.contentVersionId, message.score, issuedAt,
+            )
+            val signature = signingService.sign(payload)
+
+            val certificate = Certificate.issue(
+                certificateId = certificateId,
+                tenantId = TenantId(message.tenantId),
+                enrollmentId = message.enrollmentId,
+                learnerId = message.learnerId,
+                courseId = message.courseId,
+                contentVersionId = message.contentVersionId,
+                orgUnitId = message.orgUnitId,
+                score = message.score,
+                signature = signature,
+                issuedAt = issuedAt,
+            )
+            repository.save(certificate)
+            log.info("Issued certificate {} for enrollment {} (trigger: {})", certificateId, message.enrollmentId, message.eventType)
+        } finally {
+            TenantContext.clear()
         }
-
-        val certificateId = UUID.randomUUID()
-        val issuedAt = Instant.now()
-        val payload = CertificatePayload.canonical(
-            certificateId, message.tenantId, message.enrollmentId, message.learnerId,
-            message.courseId, message.contentVersionId, message.score, issuedAt,
-        )
-        val signature = signingService.sign(payload)
-
-        val certificate = Certificate.issue(
-            certificateId = certificateId,
-            tenantId = TenantId(message.tenantId),
-            enrollmentId = message.enrollmentId,
-            learnerId = message.learnerId,
-            courseId = message.courseId,
-            contentVersionId = message.contentVersionId,
-            orgUnitId = message.orgUnitId,
-            score = message.score,
-            signature = signature,
-            issuedAt = issuedAt,
-        )
-        repository.save(certificate)
-        log.info("Issued certificate {} for enrollment {} (trigger: {})", certificateId, message.enrollmentId, message.eventType)
     }
 }

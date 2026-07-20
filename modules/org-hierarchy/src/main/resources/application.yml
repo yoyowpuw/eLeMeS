@@ -6,8 +6,11 @@ spring:
     name: org-hierarchy
   datasource:
     url: jdbc:postgresql://localhost:5432/elemes?currentSchema=org_hierarchy
-    username: elemes
-    password: elemes_local_dev
+    # Ch.12 §2: NOT the elemes superuser — RLS is meaningless against a
+    # superuser, which bypasses row security unconditionally. See
+    # infra/postgres/init-app-role.sql.
+    username: elemes_app
+    password: elemes_app_local_dev
   flyway:
     enabled: true
     schemas: org_hierarchy

@@ -9,6 +9,7 @@ import com.elemes.certification.infrastructure.OrgScopeUnavailableException
 import com.elemes.common.AuthzInput
 import com.elemes.common.ForbiddenException
 import com.elemes.common.OpaAuthorizer
+import com.elemes.common.TenantContext
 import com.elemes.common.roles
 import com.elemes.common.tenantId
 import org.springframework.http.HttpStatus
@@ -71,10 +72,13 @@ class CertificateController(
      * Ch.26 §6: independently verifiable without platform access, given only
      * the public key — deliberately NOT gated by OPA/auth at all (see
      * SecurityConfig). No `@AuthenticationPrincipal` here since a caller may
-     * have no token whatsoever.
+     * have no token whatsoever — which also means no tenant to scope a
+     * Postgres RLS lookup to, so this is the one legitimate call site for
+     * `TenantContext.setBypass()` (see its doc comment) in this codebase.
      */
     @GetMapping("/{id}/verify")
     fun verify(@PathVariable id: UUID): ResponseEntity<VerifyResponse> {
+        TenantContext.setBypass()
         val certificate = loadOrThrow(id)
         val payload = CertificatePayload.canonical(
             certificate.certificateId, certificate.tenantId.value, certificate.enrollmentId, certificate.learnerId,

@@ -10,6 +10,12 @@ services:
       - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
+      # Ch.12 §2: creates the non-superuser elemes_app role every service
+      # actually connects as — RLS is meaningless against the superuser
+      # POSTGRES_USER role above. Only runs on a genuinely fresh volume
+      # (Postgres skips /docker-entrypoint-initdb.d/ if data already
+      # exists) — see README for the manual step on an existing one.
+      - ./infra/postgres/init-app-role.sql:/docker-entrypoint-initdb.d/01-init-app-role.sql:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U elemes -d elemes"]
       interval: 5s
