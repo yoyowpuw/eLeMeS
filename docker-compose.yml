@@ -111,6 +111,14 @@ services:
       VAULT_DEV_LISTEN_ADDRESS: 0.0.0.0:8200
     ports:
       - "8200:8200"
+    volumes:
+      # Ch.40 §3: the least-privilege policy Certification's own AppRole is
+      # bound to (see README's Vault bootstrap step) — mounted for
+      # reference/reproducibility, same pattern as OPA's policies and
+      # Keycloak's realm-export.json, though Vault (unlike those two) has
+      # no auto-load-on-startup hook, so applying it is still a one-time
+      # bootstrap command, not automatic.
+      - ./infra/vault:/vault/policies:ro
     healthcheck:
       test: ["CMD", "wget", "-q", "--spider", "http://localhost:8200/v1/sys/health?standbyok=true"]
       interval: 5s

@@ -355,6 +355,27 @@ Spring Boot services:
     *both* versions' PEM-encoded public keys, keyed by version, so a third
     party verifying independently (Ch.26 §6) can find the exact historical
     key a given signature needs, not just whatever's currently active.
+19. **Certification's Vault identity is now genuinely least-privilege — not
+    just "the root token, but we promise not to misuse it" — proven by
+    directly attempting the operations its policy doesn't grant and getting
+    real 403s from Vault itself.** Bootstrapped a dedicated AppRole
+    (`certification-service`) bound to a policy (`infra/vault/certificate-
+    signing-policy.hcl`) that grants exactly four things on exactly one
+    key: sign, verify, rotate, and read `certificate-signing` — no delete,
+    no `sys/*` access, no other transit key, no other secrets engine.
+    Certification now authenticates via `role_id`/`secret_id` (AppRole
+    login), never the root token. Before even starting the service, the
+    resulting scoped token was tested directly against Vault: it signed
+    successfully (in-policy, 200), then failed to delete the key, enable a
+    new secrets engine, create an unrelated transit key, or read Vault's
+    policy list — all real 403s from Vault's own ACL enforcement, not
+    application-level restraint. The full golden path was then re-run
+    through the actual running service using only these scoped
+    credentials — course, enrollment, certificate issuance, `/verify`,
+    rotation, and event-store tamper-detection all worked identically to
+    when the service held the root token, proving the narrower policy
+    genuinely covers everything the service legitimately needs and nothing
+    more.
 
 ## Tech stack (per the AKB's ADRs)
 
@@ -366,7 +387,7 @@ Spring Boot services:
 | Org hierarchy model | Closure table, PostgreSQL-native (Ch.19 ADR-031) | Implemented directly — no local stand-in needed, the AKB's selected technology *is* what's running locally |
 | Tenancy control plane | Ch.18 ADR-029: separate control/data plane, single provisioning model | Implemented directly as `tenant-provisioning` — data plane routing is trivial locally (one pooled Postgres cluster), so this is mostly the registry/lifecycle half of ADR-029, not the multi-region routing half |
 | Event bus/store | Managed Kafka (Ch.15 ADR-024) | **Redpanda** — fully wired: assessment → enrollment → certification, and org-hierarchy → certification (cache invalidation), all published via a transactional outbox in each producer |
-| Key management | Cloud HSM/KMS (Ch.40 ADR-066) | **HashiCorp Vault** (Transit secrets engine) — dev mode with a fixed root token locally, same simplification category as Keycloak's dev mode; the private key genuinely never leaves Vault, same as a real KMS |
+| Key management | Cloud HSM/KMS (Ch.40 ADR-066) | **HashiCorp Vault** (Transit secrets engine) — dev-mode server with a root token locally, same simplification category as Keycloak's dev mode, but Certification itself authenticates via a scoped AppRole (`certificate-signing-policy`), never the root token; the private key genuinely never leaves Vault, same as a real KMS |
 | Object storage | S3-compatible (Ch.28 ADR-045) | MinIO in docker-compose — provisioned, still unused |
 | Identity/Auth | Bought CIAM platform (Ch.16 ADR-026) | **Keycloak** — real OIDC, `tenant_id` custom claim, wired into all four services as OAuth2 Resource Servers |
 | Authorization | Policy-as-code, OPA-class (Ch.17 ADR-028) | **Open Policy Agent** — one shared container locally (per-service sidecar in production), queried over HTTP by all four services; Rego policy in `infra/opa/policies/authz.rego` |
@@ -409,18 +430,21 @@ Spring Boot services:
   affected by that specific change) — correct, since a false cache-clear
   just costs one extra live lookup, but not the fine-grained invalidation
   ADR-032 could in principle support.
-- **The signing key is Vault-backed and rotatable now, but Vault itself
-  runs in dev mode with a fixed root token — not HSM-backed, not
-  access-audited beyond Vault's own (unexamined) audit log, and every
-  service that talks to Vault uses the exact same all-powerful root
-  token.** A real deployment needs per-service Vault tokens/AppRole
-  auth scoped to exactly the `sign`/`verify`/`rotate` operations on this
-  one key (Ch.40 §3's "access strictly limited to the Certification
-  context's signing operation"), TLS to Vault, and Vault's own storage
-  backend to be genuinely HSM-backed (dev mode keeps everything in
-  memory, unsealed, by design) — none of that is true locally. Never let
-  the local Vault container or certificates it signs be mistaken for
-  anything but a local dev artifact.
+- **The signing key is Vault-backed, rotatable, and Certification's own
+  access to it is genuinely least-privilege now (What's proven #19) — but
+  Vault itself still runs in dev mode, and the *bootstrap* step (creating
+  the AppRole in the first place) still needs the root token.** The root
+  token still exists, still has to be used once to provision the transit
+  engine/key/policy/AppRole (`infra/vault/bootstrap.sh`) — a real
+  deployment would do that provisioning via a separate operator/CI-CD
+  identity, never handing the app the root token even transiently. Also
+  still missing: Vault's own storage backend being genuinely HSM-backed
+  (dev mode keeps everything in memory, unsealed, by design), TLS between
+  Certification and Vault, real access-audit review beyond Vault's own
+  (unexamined here) audit log, and AppRole secret_id rotation (this one
+  has `secret_id_ttl: 0` — never expires — for local-dev convenience).
+  Never let the local Vault container or certificates it signs be mistaken
+  for anything but a local dev artifact.
 - **Kafka consumption idempotency relies on guards, not dedup tracking.**
   Enrollment's `AssessmentEventListener` treats a duplicate delivery as a
   harmless no-op via `IllegalStateException` catch. Certification's guard is
@@ -533,6 +557,16 @@ Gradle toolchain regardless of your system `JAVA_HOME`).
 #      "create role elemes_app with login password 'elemes_app_local_dev'; \
 #       grant create, connect on database elemes to elemes_app;"
 docker compose up -d postgres redpanda keycloak opa vault
+
+# 1b. Vault has no auto-init hook like Postgres/Keycloak — this ALWAYS
+#     needs to run once against a fresh Vault container (dev mode keeps
+#     everything in memory, so this needs re-running every time the vault
+#     container itself is recreated, not just on a truly fresh checkout):
+bash infra/vault/bootstrap.sh
+#     Prints a role_id/secret_id pair. If they differ from what's already
+#     committed in modules/certification/src/main/resources/application.yml,
+#     update vault.role-id/vault.secret-id there to match — Vault generates
+#     a fresh secret_id on every bootstrap run, it isn't deterministic.
 
 # 2. Run all six services (each in its own terminal, or backgrounded)
 JAVA_HOME="/path/to/jdk-21" ./gradlew :modules:course-management:bootRun
@@ -661,6 +695,7 @@ modules/
 infra/keycloak/           realm-export.json — auto-imported realm, client, tenant_id claim mapper, seeded users
 infra/opa/policies/       authz.rego — tenant isolation + role-based restricted-action rules (Ch.17 ADR-028)
 infra/postgres/           init-app-role.sql — creates the non-superuser elemes_app role RLS depends on (Ch.12 §2)
+infra/vault/              certificate-signing-policy.hcl (least-privilege ACL) + bootstrap.sh (Ch.40 §3 one-time setup — no auto-init hook)
 docker-compose.yml        Postgres, Redpanda, Keycloak, OPA, Vault (all used); MinIO (provisioned, unused)
 docs/akb/                 the 50-chapter Architecture Knowledge Base
 ```
@@ -696,22 +731,18 @@ doesn't publish.
 
 ## Next increments, in order
 
-1. **Scoped, per-service Vault authentication**, replacing the one
-   all-powerful root token every service currently shares — the sharpest
-   gap left from this increment (Ch.40 §3's "access strictly limited to the
-   Certification context's signing operation" isn't true yet: any service
-   holding that token could read/rotate/delete the key, or any other secret
-   in this Vault instance). AppRole auth scoped to exactly `sign`/`verify`/
-   `rotate` on the `certificate-signing` key is the natural next step. This
-   is the top item now — KMS integration itself is done and proven (`.local
-   -kms/` is gone, see "What's proven" #18).
-2. Explicit outbox dedup/processed-message tracking on the consumer side,
-   tightening the "guards happen to make this safe" idempotency story noted
-   above into something more deliberate.
-3. Learning Paths (Ch.21) as an actual multi-step concept, so the
+1. **Explicit outbox dedup/processed-message tracking** on the consumer
+   side, tightening the "guards happen to make this safe" idempotency
+   story noted above into something more deliberate. This is the top item
+   now — Certification's Vault access is scoped to a least-privilege
+   AppRole and proven with real negative tests (see "What's proven" #19);
+   the remaining Vault gap (bootstrap still needs the root token, dev mode
+   isn't HSM-backed) is an infrastructure/deployment concern, not
+   something this codebase's own access-control logic can close further.
+2. Learning Paths (Ch.21) as an actual multi-step concept, so the
    certificate's realized branch/step sequence (Ch.21 §7) has something real
    to record — content-version pinning is done, this is the remaining half
    of that chapter's requirement.
-4. The silo tier (Ch.12 §2/Ch.18 §3) as more than tenant metadata — actually
+3. The silo tier (Ch.12 §2/Ch.18 §3) as more than tenant metadata — actually
    provisioning a dedicated cluster for a tenant crossing the threshold is
    still entirely unmodeled.

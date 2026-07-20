@@ -44,9 +44,15 @@ org-hierarchy:
 opa:
   base-url: http://localhost:8181
 
-# Ch.40 §3 ADR-066: local Vault dev-mode root token — never a real
-# deployment credential, same category as Keycloak's dev-mode admin
-# password. See docker-compose.yml's vault service.
+# Ch.40 §3 ADR-066: AppRole credentials scoped to certificate-signing-policy
+# (infra/vault/certificate-signing-policy.hcl) — NOT the Vault root token.
+# role_id is safe to commit (it identifies the role, not a secret by
+# itself); secret_id is the actual credential and would never be committed
+# in a real deployment (Vault Agent / a secrets-injection sidecar would
+# supply it) — it's here in plaintext purely because this whole stack is
+# local, disposable dev infrastructure with a fixed root token anyway. See
+# README's Vault bootstrap step for how both were generated.
 vault:
   base-url: http://localhost:8200
-  token: elemes-root-token
+  role-id: 40cb5a49-682b-187d-f411-1c67176057af
+  secret-id: 271543a8-2ca1-4aa0-b693-234f6e3fa6b2
