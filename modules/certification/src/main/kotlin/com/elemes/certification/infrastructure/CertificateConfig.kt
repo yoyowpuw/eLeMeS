@@ -2,6 +2,7 @@ package com.elemes.certification.infrastructure
 
 import com.elemes.common.EventStore
 import com.elemes.common.GenericJdbcEventStore
+import com.elemes.common.ProcessedMessageStore
 import org.apache.kafka.clients.consumer.ConsumerConfig
 import org.apache.kafka.common.serialization.StringDeserializer
 import org.springframework.beans.factory.annotation.Value
@@ -17,6 +18,10 @@ class CertificateConfig {
     @Bean
     fun eventStore(jdbcTemplate: JdbcTemplate): EventStore =
         GenericJdbcEventStore(jdbcTemplate, eventsTable = "certificate_events")
+
+    @Bean
+    fun processedMessageStore(jdbcTemplate: JdbcTemplate): ProcessedMessageStore =
+        ProcessedMessageStore(jdbcTemplate, table = "processed_messages")
 
     /**
      * A dedicated factory for the "org-unit-events" topic, using plain

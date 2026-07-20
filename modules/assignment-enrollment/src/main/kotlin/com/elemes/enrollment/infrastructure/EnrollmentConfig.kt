@@ -4,6 +4,7 @@ import com.elemes.common.EventStore
 import com.elemes.common.GenericJdbcEventStore
 import com.elemes.common.JdbcOutboxStore
 import com.elemes.common.OutboxPoller
+import com.elemes.common.ProcessedMessageStore
 import org.springframework.context.annotation.Bean
 import org.springframework.context.annotation.Configuration
 import org.springframework.jdbc.core.JdbcTemplate
@@ -19,6 +20,10 @@ class EnrollmentConfig {
     @Bean
     fun outboxStore(jdbcTemplate: JdbcTemplate): JdbcOutboxStore =
         JdbcOutboxStore(jdbcTemplate, outboxTable = "outbox")
+
+    @Bean
+    fun processedMessageStore(jdbcTemplate: JdbcTemplate): ProcessedMessageStore =
+        ProcessedMessageStore(jdbcTemplate, table = "processed_messages")
 
     @Bean
     fun outboxPoller(outboxStore: JdbcOutboxStore, kafkaTemplate: KafkaTemplate<String, String>): OutboxPoller =

@@ -1,6 +1,8 @@
 package com.elemes.enrollment.infrastructure
 
 import com.elemes.common.EventStore
+import com.elemes.common.ProcessedMessageRecord
+import com.elemes.common.ProcessedMessageStore
 import com.elemes.enrollment.Enrollment
 import org.springframework.jdbc.core.JdbcTemplate
 import org.springframework.stereotype.Repository
@@ -21,6 +23,7 @@ class EnrollmentRepository(
     private val mapper: EnrollmentEventMapper,
     private val jdbcTemplate: JdbcTemplate,
     private val publisher: EnrollmentEventPublisher,
+    private val processedMessageStore: ProcessedMessageStore,
 ) {
     fun findById(enrollmentId: UUID): Enrollment? {
         val envelopes = eventStore.loadEvents(enrollmentId)
@@ -28,8 +31,13 @@ class EnrollmentRepository(
         return Enrollment.rehydrate(enrollmentId, envelopes.map(mapper::toDomainEvent))
     }
 
+    /**
+     * `processedMessage`, when given, is recorded in the same transaction as
+     * the event-store append below — see ProcessedMessageStore's doc comment
+     * for why this must stay atomic with the write it accompanies.
+     */
     @Transactional
-    fun save(enrollment: Enrollment) {
+    fun save(enrollment: Enrollment, processedMessage: ProcessedMessageRecord? = null) {
         val uncommitted = enrollment.uncommittedEvents
         if (uncommitted.isEmpty()) return
 
@@ -45,6 +53,7 @@ class EnrollmentRepository(
         // atomically with the event-store append above.
         uncommitted.forEach { publisher.enqueue(it, enrollment) }
         enrollment.markCommitted()
+        processedMessage?.let { processedMessageStore.markProcessed(it.messageId, it.tenantId, it.consumer) }
     }
 
     private fun updateProjection(enrollment: Enrollment) {

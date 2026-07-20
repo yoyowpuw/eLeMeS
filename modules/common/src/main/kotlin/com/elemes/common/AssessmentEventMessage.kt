@@ -10,6 +10,8 @@ import java.util.UUID
  * each side depends on this shared shape, not on the other's domain model.
  */
 data class AssessmentEventMessage(
+    /** Stable per logical event, generated once at publish time — a redelivery of the same outbox row resends the same messageId, which is what ProcessedMessageStore dedups on. */
+    val messageId: UUID = UUID.randomUUID(),
     val eventType: String,
     val assessmentId: UUID,
     val enrollmentId: UUID,

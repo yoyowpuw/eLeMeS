@@ -2,6 +2,8 @@ package com.elemes.certification.infrastructure
 
 import com.elemes.certification.Certificate
 import com.elemes.common.EventStore
+import com.elemes.common.ProcessedMessageRecord
+import com.elemes.common.ProcessedMessageStore
 import org.springframework.jdbc.core.JdbcTemplate
 import org.springframework.stereotype.Repository
 import org.springframework.transaction.annotation.Transactional
@@ -14,6 +16,7 @@ class CertificateRepository(
     private val eventStore: EventStore,
     private val mapper: CertificateEventMapper,
     private val jdbcTemplate: JdbcTemplate,
+    private val processedMessageStore: ProcessedMessageStore,
 ) {
     fun findById(certificateId: UUID): Certificate? {
         val envelopes = eventStore.loadEvents(certificateId)
@@ -29,8 +32,13 @@ class CertificateRepository(
             enrollmentId,
         ).firstOrNull()
 
+    /**
+     * `processedMessage`, when given, is recorded in the same transaction as
+     * the event-store append below — see ProcessedMessageStore's doc comment
+     * for why this must stay atomic with the write it accompanies.
+     */
     @Transactional
-    fun save(certificate: Certificate) {
+    fun save(certificate: Certificate, processedMessage: ProcessedMessageRecord? = null) {
         val uncommitted = certificate.uncommittedEvents
         if (uncommitted.isEmpty()) return
 
@@ -38,6 +46,7 @@ class CertificateRepository(
         eventStore.append(certificate.certificateId, "Certificate", baseVersion, uncommitted.map(mapper::toEnvelope))
         updateProjection(certificate)
         certificate.markCommitted()
+        processedMessage?.let { processedMessageStore.markProcessed(it.messageId, it.tenantId, it.consumer) }
     }
 
     private fun updateProjection(certificate: Certificate) {

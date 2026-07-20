@@ -4,6 +4,8 @@ import com.elemes.certification.Certificate
 import com.elemes.certification.CertificatePayload
 import com.elemes.common.EnrollmentEventMessage
 import com.elemes.common.EnrollmentEventTopics
+import com.elemes.common.ProcessedMessageRecord
+import com.elemes.common.ProcessedMessageStore
 import com.elemes.common.TenantContext
 import com.elemes.common.TenantId
 import org.slf4j.LoggerFactory
@@ -22,9 +24,11 @@ import java.util.UUID
 class EnrollmentEventListener(
     private val repository: CertificateRepository,
     private val signingService: VaultSigningService,
+    private val processedMessageStore: ProcessedMessageStore,
 ) {
     private val log = LoggerFactory.getLogger(javaClass)
     private val completionEventTypes = setOf("ContentCompleted", "GradingPassed")
+    private val consumerName = "certification"
 
     @KafkaListener(topics = [EnrollmentEventTopics.ENROLLMENT_EVENTS])
     fun onEnrollmentEvent(message: EnrollmentEventMessage) {
@@ -36,11 +40,21 @@ class EnrollmentEventListener(
         // before any DB access below, or Postgres RLS blocks all of it.
         TenantContext.set(message.tenantId)
         try {
-            // Idempotency guard: at-least-once delivery + the unique constraint on
-            // certificate_projection.enrollment_id both protect against issuing
-            // two certificates for one enrollment.
+            // Explicit dedup log, checked first: catches redelivery of a
+            // message whose business effect already committed, without
+            // relying on the domain-state guard below.
+            if (processedMessageStore.isProcessed(message.messageId)) {
+                log.info("Message {} already processed, ignoring redelivery", message.messageId)
+                return
+            }
+
+            // Idempotency guard (defense-in-depth): at-least-once delivery + the
+            // unique constraint on certificate_projection.enrollment_id both
+            // protect against issuing two certificates for one enrollment, even
+            // if a message somehow arrives with a new messageId.
             if (repository.findByEnrollmentId(message.enrollmentId) != null) {
                 log.info("Certificate already exists for enrollment {}, ignoring duplicate completion event", message.enrollmentId)
+                processedMessageStore.markProcessed(message.messageId, message.tenantId, consumerName)
                 return
             }
 
@@ -64,7 +78,7 @@ class EnrollmentEventListener(
                 signature = signature,
                 issuedAt = issuedAt,
             )
-            repository.save(certificate)
+            repository.save(certificate, ProcessedMessageRecord(message.messageId, message.tenantId, consumerName))
             log.info("Issued certificate {} for enrollment {} (trigger: {})", certificateId, message.enrollmentId, message.eventType)
         } finally {
             TenantContext.clear()

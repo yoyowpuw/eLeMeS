@@ -376,6 +376,32 @@ Spring Boot services:
     when the service held the root token, proving the narrower policy
     genuinely covers everything the service legitimately needs and nothing
     more.
+20. **Kafka consumer-side dedup is now an explicit, persisted log, not just
+    a domain-state guard that happens to make redelivery harmless.** Both
+    `AssessmentEventListener` (assignment-enrollment) and
+    `EnrollmentEventListener` (certification) now check a `processed_messages`
+    table — the inbox counterpart to each service's outbox — before acting
+    on a message, and mark it processed atomically with the aggregate write
+    it accompanies (same transaction, same commit-or-rollback unit). Every
+    Published Language message (`EnrollmentEventMessage`,
+    `AssessmentEventMessage`) now carries a stable `messageId`, generated
+    once at publish time so a redelivery of the same outbox row always
+    carries the same id. Proved with a *real* duplicate delivery, not a
+    thought experiment: captured the exact JSON payload Enrollment published
+    for a `GradingPassed` event straight out of its outbox table, and the
+    exact `AssessmentPassed` payload from Assessment's outbox, then
+    re-produced both, byte-for-byte, directly onto their Kafka topics via
+    `rpk topic produce`. Both consumers logged "already processed, ignoring
+    redelivery" — the new explicit-log code path, not the old
+    guard/exception path — proving the dedup log itself is what caught the
+    duplicate. The pre-existing guards (`IllegalStateException` catch;
+    `enrollment_id` uniqueness) are kept as defense-in-depth, not removed.
+    The two `OrgUnitEventListener`s (course-management, certification)
+    deliberately don't get this treatment — they only call
+    `cache.invalidateAll()`, which is idempotent by construction, so an
+    explicit dedup log would add ceremony with no correctness benefit.
+    RLS, OPA, and Vault-backed signing were all re-verified unaffected by
+    re-running the full golden path end to end afterward.
 
 ## Tech stack (per the AKB's ADRs)
 
@@ -445,11 +471,6 @@ Spring Boot services:
   has `secret_id_ttl: 0` — never expires — for local-dev convenience).
   Never let the local Vault container or certificates it signs be mistaken
   for anything but a local dev artifact.
-- **Kafka consumption idempotency relies on guards, not dedup tracking.**
-  Enrollment's `AssessmentEventListener` treats a duplicate delivery as a
-  harmless no-op via `IllegalStateException` catch. Certification's guard is
-  slightly stronger — an actual `enrollment_id UNIQUE` DB constraint — but
-  still no explicit processed-message log.
 - **Question Bank (Ch.24) is inlined into Assessment**, not its own context.
 - **Learning Paths (Ch.21) don't exist as a concept** — enrollment is always
   against a single flat course. The certificate's realized branch/step
@@ -731,18 +752,10 @@ doesn't publish.
 
 ## Next increments, in order
 
-1. **Explicit outbox dedup/processed-message tracking** on the consumer
-   side, tightening the "guards happen to make this safe" idempotency
-   story noted above into something more deliberate. This is the top item
-   now — Certification's Vault access is scoped to a least-privilege
-   AppRole and proven with real negative tests (see "What's proven" #19);
-   the remaining Vault gap (bootstrap still needs the root token, dev mode
-   isn't HSM-backed) is an infrastructure/deployment concern, not
-   something this codebase's own access-control logic can close further.
-2. Learning Paths (Ch.21) as an actual multi-step concept, so the
+1. Learning Paths (Ch.21) as an actual multi-step concept, so the
    certificate's realized branch/step sequence (Ch.21 §7) has something real
    to record — content-version pinning is done, this is the remaining half
    of that chapter's requirement.
-3. The silo tier (Ch.12 §2/Ch.18 §3) as more than tenant metadata — actually
+2. The silo tier (Ch.12 §2/Ch.18 §3) as more than tenant metadata — actually
    provisioning a dedicated cluster for a tenant crossing the threshold is
    still entirely unmodeled.

@@ -10,6 +10,8 @@ import java.util.UUID
  * change to Enrollment itself.
  */
 data class EnrollmentEventMessage(
+    /** Stable per logical event, generated once at publish time — a redelivery of the same outbox row resends the same messageId, which is what ProcessedMessageStore dedups on. */
+    val messageId: UUID = UUID.randomUUID(),
     val eventType: String,
     val enrollmentId: UUID,
     val tenantId: String,
