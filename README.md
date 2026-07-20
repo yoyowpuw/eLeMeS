@@ -168,6 +168,37 @@ Spring Boot services:
     attaches it somewhere — confirmed `maya` can still create org units
     freely. Standard regression set re-checked clean: `learner1` still 403,
     no token still 401, plain tenant-scoped reads unaffected.
+13. **Org Hierarchy now publishes real Kafka events, and Certification
+    genuinely caches org-scope lookups instead of calling out on every
+    single check — proven by actually killing org-hierarchy mid-test, not
+    just by reading the code.** org-hierarchy publishes `OrgUnitChanged`
+    (on creation) and `OrgUnitReparented` (on reparent) through the same
+    transactional-outbox pattern as every other producer here. Certification
+    now caches `my-scope` lookups for 5 minutes (Ch.19 ADR-032) instead of
+    calling org-hierarchy on every `revoke_certificate` check, invalidated
+    by a Kafka listener on those same events — proven end to end: `maya`
+    revoked one certificate (a live call, populating her cache entry),
+    org-hierarchy was then killed outright, and `maya` revoked a *second*
+    in-scope certificate successfully anyway — served entirely from cache,
+    with the dependency actually down, not just "should still work in
+    theory". Org-hierarchy was restarted, a real org-unit creation was used
+    to publish a real `OrgUnitChanged` event, and Certification's log
+    confirmed it consumed that event and cleared the cache. Org-hierarchy
+    was killed a second time with the cache now empty, and `maya` revoking
+    a *third* certificate correctly got a `503` — "org-hierarchy is
+    unreachable and no cached answer exists" — not a silent 200. This was a
+    deliberate design choice, not a literal copy of ADR-032: the chapter's
+    "never block, use last-known-good" framing was written for Assignment's
+    *eligibility computation*, where staleness is a UX problem; reused
+    naively for an *authorization* decision, a cache miss during an outage
+    would have to fail open or closed, and failing open on "can this
+    manager revoke this certificate" is a real vulnerability, not a
+    convenience — so a miss with nothing cached denies with an explicit
+    503, while a hit (fresh or, if the live refresh fails, stale-but-known)
+    is served without ever touching the network. `admin1` was confirmed
+    unaffected throughout — revocation as admin doesn't consult the cache
+    or org-hierarchy at all, so it kept working the entire time
+    org-hierarchy was down.
 
 ## Tech stack (per the AKB's ADRs)
 
@@ -177,7 +208,7 @@ Spring Boot services:
 | Framework | Spring Boot 3.3 | — (not pinned by the AKB; chosen for this scaffold) |
 | Database | PostgreSQL (Ch.12 ADR-016) | Docker, `postgres:16-alpine`, **one schema per service** (`enrollment`, `assessment`, `course_mgmt`, `certification`, `org_hierarchy`) — genuine per-context data ownership on one shared local instance |
 | Org hierarchy model | Closure table, PostgreSQL-native (Ch.19 ADR-031) | Implemented directly — no local stand-in needed, the AKB's selected technology *is* what's running locally |
-| Event bus/store | Managed Kafka (Ch.15 ADR-024) | **Redpanda** — fully wired: assessment → enrollment → certification, published via a transactional outbox in each producer |
+| Event bus/store | Managed Kafka (Ch.15 ADR-024) | **Redpanda** — fully wired: assessment → enrollment → certification, and org-hierarchy → certification (cache invalidation), all published via a transactional outbox in each producer |
 | Key management | Cloud HSM/KMS (Ch.40 ADR-066) | **Local RSA keypair**, file-persisted under `.local-kms/` (gitignored) — see deferred items |
 | Object storage | S3-compatible (Ch.28 ADR-045) | MinIO in docker-compose — provisioned, still unused |
 | Identity/Auth | Bought CIAM platform (Ch.16 ADR-026) | **Keycloak** — real OIDC, `tenant_id` custom claim, wired into all four services as OAuth2 Resource Servers |
@@ -194,23 +225,32 @@ Spring Boot services:
   surface, and there's no per-resource ownership check finer than "same
   tenant" (e.g. a `manager` can act on any resource in their tenant, not
   just ones they were assigned).
-- **Org Hierarchy is real and now feeds four real authorization decisions,
-  not one.** The closure-table model, re-parenting, and matrixed hierarchy
-  types are tested (see "What's proven" #10), and `revoke_certificate`,
-  `create_course`, `publish_course_version`, and `org_unit_reparent` are all
-  genuinely org-scoped for managers now (see "What's proven" #11–12).
-  `org_unit_create` is the one deliberate exception — a brand-new unit has
-  no target org to scope against until a separate `reparent` call attaches
-  it somewhere, so it stays tenant+role only by design, not by omission.
-  What's still not built: (1) `OrgUnitChanged`/`OrgUnitReparented` events
-  still aren't published to Kafka (§4) — there's still no consumer for
-  them, since Assignment's eligibility-computation use case (§3, ADR-032's
-  5-min TTL cache/fallback) doesn't exist as separate logic in this
-  codebase; (2) org-unit membership itself stays a single `managerUserId`
-  field on each unit, resolved fresh via `GET /org-units/my-scope` (or an
-  in-process equivalent, inside org-hierarchy itself) on every single
-  org-scoped check — no caching (that's exactly ADR-032's still-missing
-  piece) and no real HRIS/directory sync behind any of it.
+- **Org Hierarchy is real, feeds four real authorization decisions, publishes
+  real events, and one consumer genuinely caches against them.** The
+  closure-table model, re-parenting, and matrixed hierarchy types are
+  tested (see "What's proven" #10); `revoke_certificate`, `create_course`,
+  `publish_course_version`, and `org_unit_reparent` are all genuinely
+  org-scoped for managers (#11–12); `OrgUnitChanged`/`OrgUnitReparented`
+  now publish over Kafka via the same outbox pattern as every other
+  producer, and Certification's `my-scope` lookups are cached for 5
+  minutes (Ch.19 ADR-032) and invalidated by those events, proven under an
+  actual org-hierarchy outage, not just described (#13). `org_unit_create`
+  is the one deliberate authorization exception — a brand-new unit has no
+  target org to scope against until a separate `reparent` call attaches it
+  somewhere, so it stays tenant+role only by design, not by omission. What's
+  still not built: (1) only Certification's `revoke_certificate` path
+  consumes the cache — Course Management's `create_course`/
+  `publish_course_version` and org-hierarchy's own `reparent` still resolve
+  `my-scope` fresh on every check, uncached, so an org-hierarchy outage
+  would correctly deny those (fail-closed, same principle as
+  Certification's), but wouldn't degrade to "served from cache" the way
+  revocation now does; (2) org-unit membership itself stays a single
+  `managerUserId` field on each unit — no real HRIS/directory sync behind
+  any of it; (3) the cache invalidation is coarse (any org-unit event
+  clears the *entire* cache, not just entries for managers actually
+  affected by that specific change) — correct, since a false cache-clear
+  just costs one extra live lookup, but not the fine-grained invalidation
+  ADR-032 could in principle support.
 - **Certificate-signing key is a local file, not an HSM/KMS.** `.local-kms/`
   holds a plaintext RSA private key. It is persisted across restarts purely
   so local demo certificates keep verifying — this has zero of the protection
@@ -394,8 +434,8 @@ modules/
   course-management/      plain CRUD Course service + Ch.12 §7 hash-addressed, insert-only content versioning + OrgHierarchyClient (Ch.19-scoped create/publish)
   assignment-enrollment/  event-sourced Enrollment aggregate + REST API + outbox-backed Kafka producer/consumer
   assessment/              event-sourced Assessment aggregate + REST API + outbox-backed Kafka producer
-  certification/           event-sourced Certificate aggregate (pins content version + signs it) + REST API + Kafka consumer + local signing + OrgHierarchyClient (Ch.19-scoped revocation)
-  org-hierarchy/           plain CRUD OrgUnit service + Ch.19 §2 PostgreSQL closure-table hierarchy model (multiple concurrent hierarchy types, re-parenting)
+  certification/           event-sourced Certificate aggregate (pins content version + signs it) + REST API + 2 Kafka consumers (EnrollmentEventMessage, OrgUnitEventMessage) + local signing + OrgScopeCache (Ch.19 ADR-032, 5-min TTL, fail-closed)
+  org-hierarchy/           plain CRUD OrgUnit service + Ch.19 §2 PostgreSQL closure-table hierarchy model (multiple concurrent hierarchy types, re-parenting) + outbox-backed Kafka producer
 infra/keycloak/           realm-export.json — auto-imported realm, client, tenant_id claim mapper, seeded users
 infra/opa/policies/       authz.rego — tenant isolation + role-based restricted-action rules (Ch.17 ADR-028)
 docker-compose.yml        Postgres, Redpanda, Keycloak, OPA (all used); MinIO (provisioned, unused)
@@ -433,15 +473,14 @@ doesn't publish.
 
 ## Next increments, in order
 
-1. **Ch.19 §3/§4's event side.** Publish `OrgUnitChanged`/
-   `OrgUnitReparented` to Kafka via the outbox pattern, and give some
-   service a reason to consume them — ADR-032's 5-min TTL cache/fallback
-   pattern needs a real consumer to be worth building. Right now every
-   org-scoped authorization check (revocation, course create/publish,
-   reparent) resolves `my-scope` fresh and uncached, every single time —
-   correct, but not what §3 specifies, and the more org-scoped actions pile
-   up (see item #12 in "What's proven"), the more that starts to matter for
-   latency, not just spec fidelity. This is the top item now.
+1. **Extend the ADR-032 cache to Course Management and org-hierarchy's own
+   reparent check.** Certification's `revoke_certificate` path is cached
+   and event-invalidated (see "What's proven" #13); `create_course`/
+   `publish_course_version` (Course Management) and `org_unit_reparent`
+   (org-hierarchy itself) still resolve `my-scope` fresh on every single
+   check. Same `OrgScopeCache`-shaped component, same `OrgUnitEventMessage`
+   topic already exists to drive invalidation — just needs repeating in two
+   more places. This is the top item now.
 2. Multi-tenancy hybrid isolation (Ch.12 §2/Ch.18) — required before more
    than one real customer.
 3. Real KMS integration (Ch.40 §3), replacing `.local-kms/` — required

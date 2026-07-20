@@ -4,7 +4,8 @@ import com.elemes.certification.Certificate
 import com.elemes.certification.CertificatePayload
 import com.elemes.certification.infrastructure.CertificateRepository
 import com.elemes.certification.infrastructure.LocalSigningService
-import com.elemes.certification.infrastructure.OrgHierarchyClient
+import com.elemes.certification.infrastructure.OrgScopeCache
+import com.elemes.certification.infrastructure.OrgScopeUnavailableException
 import com.elemes.common.AuthzInput
 import com.elemes.common.ForbiddenException
 import com.elemes.common.OpaAuthorizer
@@ -48,7 +49,7 @@ class CertificateController(
     private val repository: CertificateRepository,
     private val signingService: LocalSigningService,
     private val authorizer: OpaAuthorizer,
-    private val orgHierarchyClient: OrgHierarchyClient,
+    private val orgScopeCache: OrgScopeCache,
 ) {
 
     @GetMapping("/{id}")
@@ -88,7 +89,9 @@ class CertificateController(
      * can only revoke ones whose learner belongs to an org unit the manager
      * actually manages (or a descendant of one) — resolved by asking
      * Org Hierarchy for the caller's own scope, token-relayed. Only resolved
-     * when the caller isn't already admin, since admin never needs it.
+     * when the caller isn't already admin, since admin never needs it — and
+     * cached per Ch.19 ADR-032 (see OrgScopeCache) rather than re-fetched on
+     * every single revoke call.
      */
     @PostMapping("/{id}/revoke")
     fun revoke(
@@ -99,7 +102,8 @@ class CertificateController(
         val certificate = loadOrThrow(id)
         val roles = jwt.roles()
         val callerOrgUnits = if ("admin" !in roles && "manager" in roles) {
-            orgHierarchyClient.myScope(jwt.tokenValue).map { it.toString() }
+            val username = jwt.getClaimAsString("preferred_username") ?: jwt.subject
+            orgScopeCache.getScope(username, jwt.tokenValue)
         } else {
             emptyList()
         }
@@ -134,6 +138,11 @@ class CertificateExceptionHandler {
     @ExceptionHandler(ForbiddenException::class)
     fun handleForbidden(ex: ForbiddenException): ResponseEntity<Map<String, String>> =
         ResponseEntity.status(HttpStatus.FORBIDDEN).body(mapOf("error" to (ex.message ?: "forbidden")))
+
+    /** Explicit signal, not a generic 500 — org-hierarchy is unreachable and there's no cached scope to fall back to, so the decision can't be made at all. */
+    @ExceptionHandler(OrgScopeUnavailableException::class)
+    fun handleOrgScopeUnavailable(ex: OrgScopeUnavailableException): ResponseEntity<Map<String, String>> =
+        ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE).body(mapOf("error" to (ex.message ?: "org scope unavailable")))
 
     @ExceptionHandler(IllegalStateException::class)
     fun handleInvalid(ex: RuntimeException): ResponseEntity<Map<String, String>> =

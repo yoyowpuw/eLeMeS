@@ -9,7 +9,10 @@ import java.time.Instant
 import java.util.UUID
 
 @Repository
-class OrgUnitRepository(private val jdbcTemplate: JdbcTemplate) {
+class OrgUnitRepository(
+    private val jdbcTemplate: JdbcTemplate,
+    private val eventPublisher: OrgUnitEventPublisher,
+) {
 
     @Transactional
     fun create(orgUnitId: UUID, tenantId: String, name: String, unitType: String, managerUserId: String?): OrgUnit {
@@ -18,6 +21,8 @@ class OrgUnitRepository(private val jdbcTemplate: JdbcTemplate) {
             "insert into org_units (org_unit_id, tenant_id, name, unit_type, manager_user_id, created_at) values (?, ?, ?, ?, ?, ?)",
             orgUnitId, tenantId, name, unitType, managerUserId, Timestamp.from(now),
         )
+        // Transactional outbox (Ch.19 §4): commits or rolls back atomically with the insert above.
+        eventPublisher.enqueue("OrgUnitChanged", orgUnitId, tenantId, hierarchyType = null)
         return OrgUnit(orgUnitId, tenantId, name, unitType, managerUserId, now)
     }
 
@@ -54,7 +59,7 @@ class OrgUnitRepository(private val jdbcTemplate: JdbcTemplate) {
      *      subtree under its new ancestors in one INSERT.
      */
     @Transactional
-    fun reparent(orgUnitId: UUID, newParentId: UUID?, hierarchyType: String) {
+    fun reparent(orgUnitId: UUID, newParentId: UUID?, hierarchyType: String, tenantId: String) {
         ensureSelfRow(orgUnitId, hierarchyType)
         if (newParentId != null) ensureSelfRow(newParentId, hierarchyType)
 
@@ -84,6 +89,9 @@ class OrgUnitRepository(private val jdbcTemplate: JdbcTemplate) {
                 hierarchyType, hierarchyType, newParentId, hierarchyType, orgUnitId,
             )
         }
+
+        // Transactional outbox (Ch.19 §4): commits or rolls back atomically with the closure-table rewrite above.
+        eventPublisher.enqueue("OrgUnitReparented", orgUnitId, tenantId, hierarchyType)
     }
 
     private fun ensureSelfRow(orgUnitId: UUID, hierarchyType: String) {

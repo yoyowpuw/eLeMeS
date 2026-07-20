@@ -91,7 +91,7 @@ class OrgUnitController(
                 AuthzInput("org_unit_reparent", jwt.tenantId().value, roles, parent.tenantId, callerOrgUnits, parent.orgUnitId.toString())
             )
         }
-        repository.reparent(id, request.newParentId, request.hierarchyType)
+        repository.reparent(id, request.newParentId, request.hierarchyType, unit.tenantId)
         return ResponseEntity.ok(unit.toResponse())
     }
 

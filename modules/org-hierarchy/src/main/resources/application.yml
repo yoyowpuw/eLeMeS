@@ -13,6 +13,13 @@ spring:
     schemas: org_hierarchy
     create-schemas: true
     default-schema: org_hierarchy
+  kafka:
+    bootstrap-servers: localhost:9092
+    producer:
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      # Plain String, not JsonSerializer — see assessment's application.yml comment;
+      # the outbox already stores pre-serialized JSON via OrgUnitEventPublisher.
+      value-serializer: org.apache.kafka.common.serialization.StringSerializer
   security:
     oauth2:
       resourceserver:
