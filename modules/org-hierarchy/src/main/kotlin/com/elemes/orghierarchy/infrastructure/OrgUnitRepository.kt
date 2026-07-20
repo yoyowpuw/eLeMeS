@@ -93,6 +93,14 @@ class OrgUnitRepository(private val jdbcTemplate: JdbcTemplate) {
         )
     }
 
+    /** Units this user is the direct manager of — the starting point for resolving their full authority scope (see descendants()). */
+    fun findManagedBy(managerUserId: String, tenantId: String): List<OrgUnit> =
+        jdbcTemplate.query(
+            "select org_unit_id, tenant_id, name, unit_type, manager_user_id, created_at from org_units where manager_user_id = ? and tenant_id = ?",
+            { rs, _ -> mapUnit(rs) },
+            managerUserId, tenantId,
+        )
+
     /** Fast indexed join, not a recursive query — Ch.19 §2's stated reason for choosing closure table. */
     fun descendants(orgUnitId: UUID, hierarchyType: String): List<OrgUnit> =
         jdbcTemplate.query(

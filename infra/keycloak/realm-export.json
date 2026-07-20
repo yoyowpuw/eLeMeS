@@ -73,6 +73,18 @@
       "credentials": [{ "type": "password", "value": "learner1", "temporary": false }],
       "attributes": { "tenant_id": ["globex-corp"] },
       "realmRoles": ["learner"]
+    },
+    {
+      "username": "maya",
+      "enabled": true,
+      "emailVerified": true,
+      "email": "maya@acme-corp.example",
+      "firstName": "Maya",
+      "lastName": "Manager",
+      "requiredActions": [],
+      "credentials": [{ "type": "password", "value": "maya", "temporary": false }],
+      "attributes": { "tenant_id": ["acme-corp"] },
+      "realmRoles": ["manager"]
     }
   ]
 }

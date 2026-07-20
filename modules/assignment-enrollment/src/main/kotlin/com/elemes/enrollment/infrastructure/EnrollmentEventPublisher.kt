@@ -29,6 +29,7 @@ class EnrollmentEventPublisher(
             learnerId = enrollment.learnerId,
             courseId = enrollment.courseId,
             contentVersionId = enrollment.contentVersionId,
+            orgUnitId = enrollment.orgUnitId,
             score = (event as? GradingPassed)?.score,
             occurredAt = event.occurredAt,
         )

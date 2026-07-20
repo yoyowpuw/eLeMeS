@@ -52,6 +52,7 @@ class EnrollmentEventListener(
             learnerId = message.learnerId,
             courseId = message.courseId,
             contentVersionId = message.contentVersionId,
+            orgUnitId = message.orgUnitId,
             score = message.score,
             signature = signature,
             issuedAt = issuedAt,

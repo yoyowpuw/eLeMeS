@@ -96,6 +96,29 @@ class OrgUnitController(
         return ResponseEntity.ok(repository.ancestors(id, hierarchyType).map { it.toResponse() })
     }
 
+    /**
+     * Ch.19: the set of org units the caller has authority over — the units
+     * they directly manage plus every descendant of those units (Ch.19 §2's
+     * "all reports under Maya" example). No OPA check here: this is always
+     * about the caller's own scope, so there's no other tenant's data or
+     * role gate to enforce — any authenticated caller may ask "what's mine".
+     * Consumed by other services (e.g. Certification's manager-scoped
+     * revocation check) via token-relay, the same pattern used elsewhere for
+     * synchronous cross-service reads.
+     */
+    @GetMapping("/my-scope")
+    fun myScope(
+        @AuthenticationPrincipal jwt: Jwt,
+        @RequestParam(defaultValue = DEFAULT_HIERARCHY_TYPE) hierarchyType: String,
+    ): ResponseEntity<List<UUID>> {
+        val managerUserId = jwt.getClaimAsString("preferred_username") ?: return ResponseEntity.ok(emptyList())
+        val managed = repository.findManagedBy(managerUserId, jwt.tenantId().value)
+        val scope = managed.flatMap { repository.descendants(it.orgUnitId, hierarchyType) }
+            .map { it.orgUnitId }
+            .distinct()
+        return ResponseEntity.ok(scope)
+    }
+
     private fun loadOrThrow(id: UUID): OrgUnit = repository.findById(id) ?: throw OrgUnitNotFoundException(id)
 }
 

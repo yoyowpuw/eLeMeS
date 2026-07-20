@@ -17,6 +17,8 @@ data class EnrollmentEventMessage(
     val courseId: String,
     /** Ch.5 ADR-005 / Ch.21 §7: the version pinned at enrollment time — Certification signs exactly this, not "whatever's current now." */
     val contentVersionId: UUID,
+    /** Ch.19: the learner's org unit, if any — lets Certification scope manager-initiated revocation to their own subtree. */
+    val orgUnitId: UUID? = null,
     val score: Int?,
     val occurredAt: Instant,
 )

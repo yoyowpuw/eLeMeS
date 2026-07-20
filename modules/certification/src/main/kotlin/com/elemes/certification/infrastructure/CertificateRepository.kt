@@ -44,8 +44,8 @@ class CertificateRepository(
         jdbcTemplate.update(
             """
             insert into certificate_projection
-                (certificate_id, tenant_id, enrollment_id, learner_id, course_id, content_version_id, score, signature, status, issued_at, updated_at)
-            values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                (certificate_id, tenant_id, enrollment_id, learner_id, course_id, content_version_id, org_unit_id, score, signature, status, issued_at, updated_at)
+            values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             on conflict (certificate_id) do update set
                 status = excluded.status,
                 updated_at = excluded.updated_at
@@ -56,6 +56,7 @@ class CertificateRepository(
             certificate.learnerId,
             certificate.courseId,
             certificate.contentVersionId,
+            certificate.orgUnitId,
             certificate.score,
             certificate.signature,
             certificate.status.name,

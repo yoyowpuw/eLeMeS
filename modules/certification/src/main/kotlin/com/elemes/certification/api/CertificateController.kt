@@ -4,6 +4,7 @@ import com.elemes.certification.Certificate
 import com.elemes.certification.CertificatePayload
 import com.elemes.certification.infrastructure.CertificateRepository
 import com.elemes.certification.infrastructure.LocalSigningService
+import com.elemes.certification.infrastructure.OrgHierarchyClient
 import com.elemes.common.AuthzInput
 import com.elemes.common.ForbiddenException
 import com.elemes.common.OpaAuthorizer
@@ -29,6 +30,7 @@ data class CertificateResponse(
     val learnerId: String,
     val courseId: String,
     val contentVersionId: UUID,
+    val orgUnitId: UUID?,
     val score: Int?,
     val status: String,
     val issuedAt: String,
@@ -46,6 +48,7 @@ class CertificateController(
     private val repository: CertificateRepository,
     private val signingService: LocalSigningService,
     private val authorizer: OpaAuthorizer,
+    private val orgHierarchyClient: OrgHierarchyClient,
 ) {
 
     @GetMapping("/{id}")
@@ -79,7 +82,14 @@ class CertificateController(
         return ResponseEntity.ok(VerifyResponse(signingService.verify(payload, certificate.signature)))
     }
 
-    /** Ch.17 ADR-028: revocation is admin-only — the highest-consequence mutation this service exposes. */
+    /**
+     * Ch.17 ADR-028 / Ch.19: the highest-consequence mutation this service
+     * exposes. `admin` can revoke any certificate in the tenant; `manager`
+     * can only revoke ones whose learner belongs to an org unit the manager
+     * actually manages (or a descendant of one) — resolved by asking
+     * Org Hierarchy for the caller's own scope, token-relayed. Only resolved
+     * when the caller isn't already admin, since admin never needs it.
+     */
     @PostMapping("/{id}/revoke")
     fun revoke(
         @AuthenticationPrincipal jwt: Jwt,
@@ -87,7 +97,18 @@ class CertificateController(
         @RequestBody request: RevokeRequest,
     ): ResponseEntity<CertificateResponse> {
         val certificate = loadOrThrow(id)
-        authorizer.check(AuthzInput("revoke_certificate", jwt.tenantId().value, jwt.roles(), certificate.tenantId.value))
+        val roles = jwt.roles()
+        val callerOrgUnits = if ("admin" !in roles && "manager" in roles) {
+            orgHierarchyClient.myScope(jwt.tokenValue).map { it.toString() }
+        } else {
+            emptyList()
+        }
+        authorizer.check(
+            AuthzInput(
+                "revoke_certificate", jwt.tenantId().value, roles, certificate.tenantId.value,
+                callerOrgUnits, certificate.orgUnitId?.toString(),
+            )
+        )
         certificate.revoke(request.reason)
         repository.save(certificate)
         return ResponseEntity.ok(certificate.toResponse())
@@ -100,7 +121,7 @@ class CertificateController(
 }
 
 private fun Certificate.toResponse() = CertificateResponse(
-    certificateId, enrollmentId, learnerId, courseId, contentVersionId, score, status.name, issuedAt.toString(), signature,
+    certificateId, enrollmentId, learnerId, courseId, contentVersionId, orgUnitId, score, status.name, issuedAt.toString(), signature,
 )
 
 @RestControllerAdvice

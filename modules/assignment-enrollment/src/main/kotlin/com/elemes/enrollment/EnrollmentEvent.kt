@@ -24,6 +24,8 @@ data class LearnerEnrolled(
     val courseId: String,
     /** Ch.5 ADR-005 / Ch.21 §7: pinned at enrollment time, never re-queried — this is what the eventual certificate signs. */
     val contentVersionId: UUID,
+    /** Ch.19: which org unit this learner belongs to, if any — opt-in, propagated downstream to Certification for manager-scoped authorization. */
+    val orgUnitId: UUID? = null,
     override val occurredAt: Instant = Instant.now(),
 ) : EnrollmentEvent
 

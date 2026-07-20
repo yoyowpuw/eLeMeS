@@ -27,6 +27,8 @@ data class CertificateIssued(
     val learnerId: String,
     val courseId: String,
     val contentVersionId: UUID,
+    /** Ch.19: the learner's org unit at enrollment time, if any — not part of the signed payload, purely an authorization attribute for manager-scoped revocation. */
+    val orgUnitId: UUID? = null,
     val score: Int?,
     val signature: String,
     override val occurredAt: Instant,

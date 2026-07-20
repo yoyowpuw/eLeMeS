@@ -51,8 +51,8 @@ class EnrollmentRepository(
         jdbcTemplate.update(
             """
             insert into enrollment_projection
-                (enrollment_id, tenant_id, learner_id, course_id, status, progress_percent, updated_at)
-            values (?, ?, ?, ?, ?, ?, ?)
+                (enrollment_id, tenant_id, learner_id, course_id, org_unit_id, status, progress_percent, updated_at)
+            values (?, ?, ?, ?, ?, ?, ?, ?)
             on conflict (enrollment_id) do update set
                 status = excluded.status,
                 progress_percent = excluded.progress_percent,
@@ -62,6 +62,7 @@ class EnrollmentRepository(
             enrollment.tenantId.value,
             enrollment.learnerId,
             enrollment.courseId,
+            enrollment.orgUnitId,
             enrollment.status.name,
             enrollment.progressPercent,
             Timestamp.from(Instant.now()),

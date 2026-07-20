@@ -8,6 +8,10 @@ data class AuthzInput(
     val callerRoles: List<String>,
     /** Null for actions that create a brand-new resource — there's nothing to tenant-check yet. */
     val resourceTenant: String? = null,
+    /** Ch.19: the org units (managed unit + all its descendants) the caller has authority over. Only resolved for org-scoped actions — empty otherwise. */
+    val callerOrgUnits: List<String> = emptyList(),
+    /** Ch.19: the resource's own org unit, if it has one — null for resources never assigned one, or actions not org-scoped. */
+    val resourceOrgUnit: String? = null,
 )
 
 private data class OpaRequest(val input: OpaRequestInput)
@@ -16,6 +20,8 @@ private data class OpaRequestInput(
     val caller_tenant: String,
     val caller_roles: List<String>,
     val resource_tenant: String?,
+    val caller_org_units: List<String>,
+    val resource_org_unit: String?,
 )
 private data class OpaResponse(val result: Boolean?)
 
@@ -35,7 +41,14 @@ class OpaAuthorizer(private val opaBaseUrl: String) {
         val allowed = try {
             restClient.post()
                 .uri("/v1/data/elemes/authz/allow")
-                .body(OpaRequest(OpaRequestInput(input.action, input.callerTenant, input.callerRoles, input.resourceTenant)))
+                .body(
+                    OpaRequest(
+                        OpaRequestInput(
+                            input.action, input.callerTenant, input.callerRoles, input.resourceTenant,
+                            input.callerOrgUnits, input.resourceOrgUnit,
+                        )
+                    )
+                )
                 .retrieve()
                 .body(OpaResponse::class.java)
                 ?.result ?: false

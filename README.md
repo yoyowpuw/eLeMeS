@@ -126,6 +126,25 @@ Spring Boot services:
     re-parenting were verified the same way as the other services: a
     `learner` token gets 403, `admin` succeeds, a `globex-corp` token gets
     403 reading an `acme-corp` org unit.
+11. **A manager really is limited to their own org subtree for
+    certificate revocation — not just their whole tenant.** Closes half of
+    the gap named right above this list, in "Deliberately deferred":
+    `revoke_certificate` is now Ch.19-scoped for managers, not just
+    tenant-checked. Built a real subtree (`Platform`, managed by `maya`,
+    with `Frontend` underneath it) and an unrelated unit (`Marketing`,
+    nobody's subtree), enrolled a learner in each with an `orgUnitId`, let
+    both run the full golden path to a real issued certificate — confirming
+    `orgUnitId` propagates correctly through two Kafka hops, from
+    Enrollment's `EnrollmentEventMessage` all the way to
+    `Certificate.orgUnitId` — then: `maya` revoking the `Frontend` learner's
+    certificate gets 200 (it's in her subtree); `maya` revoking the
+    `Marketing` learner's certificate gets 403 (it isn't, even though both
+    are in the same tenant); `admin1` revoking that same `Marketing`
+    certificate gets 200 (admin stays tenant-wide, unaffected by
+    org-scoping). Every existing regression case was re-checked too:
+    `learner1` still gets 403 outright, no token still gets 401, re-revoking
+    an already-revoked certificate still 409s, and `/verify` stays public
+    with no token even for a certificate a manager just revoked.
 
 ## Tech stack (per the AKB's ADRs)
 
@@ -152,18 +171,24 @@ Spring Boot services:
   surface, and there's no per-resource ownership check finer than "same
   tenant" (e.g. a `manager` can act on any resource in their tenant, not
   just ones they were assigned).
-- **Org Hierarchy exists but nothing else consumes it yet.** The
-  closure-table model, re-parenting, and matrixed hierarchy types are real
-  and tested (see "What's proven" #10), but two things named in Ch.19 are
-  deliberately not built: (1) `OrgUnitChanged`/`OrgUnitReparented` events
-  aren't published to Kafka yet (§4) — there's no consumer for them yet,
-  since Assignment's eligibility-computation use case (§3, ADR-032's 5-min
-  TTL cache/fallback) doesn't exist as separate logic in this codebase; (2)
-  no other service's OPA checks actually use org-unit membership yet — a
-  `manager` can still act on any resource in their own tenant, not just
-  ones within the org units they manage. Org Hierarchy is a real,
-  independently-correct building block; wiring it into the other four
-  services' authorization is the next step, not this one.
+- **Org Hierarchy is real and now feeds one real authorization decision,
+  not four.** The closure-table model, re-parenting, and matrixed hierarchy
+  types are tested (see "What's proven" #10), and `revoke_certificate` is
+  genuinely org-scoped for managers now (see "What's proven" #11) — but two
+  things named in Ch.19 are still deliberately not built: (1)
+  `OrgUnitChanged`/`OrgUnitReparented` events still aren't published to
+  Kafka (§4) — there's still no consumer for them, since Assignment's
+  eligibility-computation use case (§3, ADR-032's 5-min TTL cache/fallback)
+  doesn't exist as separate logic in this codebase; (2) course creation/
+  publishing and org-unit management themselves are still just tenant+role
+  checked, not org-scoped — a `manager` can still create or publish any
+  course, or reparent any org unit, in their tenant. Only the one action
+  that most obviously needed it (revoking someone's certificate) got
+  scoped; the other restricted actions are the next step, not this one.
+  Org-unit membership itself also stays a single `managerUserId` field on
+  each unit, resolved via `GET /org-units/my-scope` on every check that
+  needs it — no caching (that's exactly ADR-032's still-missing piece), and
+  no real HRIS/directory sync behind it.
 - **Certificate-signing key is a local file, not an HSM/KMS.** `.local-kms/`
   holds a plaintext RSA private key. It is persisted across restarts purely
   so local demo certificates keep verifying — this has zero of the protection
@@ -239,7 +264,8 @@ JAVA_HOME="/path/to/jdk-21" ./gradlew :modules:org-hierarchy:bootRun
 
 ```bash
 # 3. Get a real token (see infra/keycloak/realm-export.json for the seeded
-#    users — learner1/admin1 in tenant "acme-corp", plus a second-tenant user)
+#    users — learner1/admin1 in tenant "acme-corp", plus maya, a "manager"-
+#    role user in the same tenant, and a second-tenant user)
 TOKEN=$(curl -s -X POST http://localhost:8080/realms/elemes/protocol/openid-connect/token \
   -d "grant_type=password" -d "client_id=elemes-service" \
   -d "username=learner1" -d "password=learner1" \
@@ -296,6 +322,22 @@ curl -s "localhost:8085/api/v1/org-units/$A/descendants?hierarchyType=reporting-
 curl -s -X POST localhost:8085/api/v1/org-units/$B/reparent -H "Content-Type: application/json" -H "Authorization: Bearer $ADMIN_TOKEN" -d "{\"newParentId\":\"$D\",\"hierarchyType\":\"reporting-line\"}"
 curl -s "localhost:8085/api/v1/org-units/$A/descendants?hierarchyType=reporting-line" -H "Authorization: Bearer $ADMIN_TOKEN"   # -> [Engineering] only
 curl -s "localhost:8085/api/v1/org-units/$D/descendants?hierarchyType=reporting-line" -H "Authorization: Bearer $ADMIN_TOKEN"   # -> [Operations, Platform Team]
+
+# 7. Manager-scoped certificate revocation: maya can only revoke certificates
+# for learners in her own subtree (Platform Team, under D), not anyone else's.
+MAYA_TOKEN=$(curl -s -X POST http://localhost:8080/realms/elemes/protocol/openid-connect/token \
+  -d "grant_type=password" -d "client_id=elemes-service" -d "username=maya" -d "password=maya" \
+  | grep -o '"access_token":"[^"]*"' | cut -d'"' -f4)
+curl -s "localhost:8085/api/v1/org-units/my-scope?hierarchyType=reporting-line" -H "Authorization: Bearer $MAYA_TOKEN"   # -> [Platform Team, ...]
+
+# Enroll a learner into $B (in maya's scope) and another into an unrelated unit,
+# run each through to a real certificate (see step 4's golden path), then:
+curl -i -X POST localhost:8084/api/v1/certificates/{inScopeCertId}/revoke \
+  -H "Content-Type: application/json" -H "Authorization: Bearer $MAYA_TOKEN" -d '{"reason":"test"}'   # -> 200
+curl -i -X POST localhost:8084/api/v1/certificates/{outOfScopeCertId}/revoke \
+  -H "Content-Type: application/json" -H "Authorization: Bearer $MAYA_TOKEN" -d '{"reason":"test"}'   # -> 403
+curl -i -X POST localhost:8084/api/v1/certificates/{outOfScopeCertId}/revoke \
+  -H "Content-Type: application/json" -H "Authorization: Bearer $ADMIN_TOKEN" -d '{"reason":"test"}'  # -> 200 (admin stays tenant-wide)
 ```
 
 ### Running the test suite
@@ -330,7 +372,7 @@ modules/
   course-management/      plain CRUD Course service + Ch.12 §7 hash-addressed, insert-only content versioning
   assignment-enrollment/  event-sourced Enrollment aggregate + REST API + outbox-backed Kafka producer/consumer
   assessment/              event-sourced Assessment aggregate + REST API + outbox-backed Kafka producer
-  certification/           event-sourced Certificate aggregate (pins content version + signs it) + REST API + Kafka consumer + local signing
+  certification/           event-sourced Certificate aggregate (pins content version + signs it) + REST API + Kafka consumer + local signing + OrgHierarchyClient (Ch.19-scoped revocation)
   org-hierarchy/           plain CRUD OrgUnit service + Ch.19 §2 PostgreSQL closure-table hierarchy model (multiple concurrent hierarchy types, re-parenting)
 infra/keycloak/           realm-export.json — auto-imported realm, client, tenant_id claim mapper, seeded users
 infra/opa/policies/       authz.rego — tenant isolation + role-based restricted-action rules (Ch.17 ADR-028)
@@ -369,21 +411,22 @@ doesn't publish.
 
 ## Next increments, in order
 
-1. **Wire Org Hierarchy into authorization** — the other four services'
-   OPA checks still only know tenant + role, not org-unit membership. This
-   is what closes the "manager can act on any resource in their tenant"
-   gap named above: resources need an `org_unit_id`, callers need their
-   org-unit membership resolved (from `managerUserId` or a real membership
-   table, still undecided), and the Rego policy needs an `org_ok` rule
-   checking descendant-of relationships via a `resource_org_unit` /
-   `caller_org_units` input — likely by having each service query
-   org-hierarchy's `/descendants` endpoint, or by pushing org data into OPA
-   as a data document (avoids an HTTP call per authz check). This is the
-   top item now.
+1. **Extend org-scoping to the rest of the restricted actions.**
+   `revoke_certificate` proves the pattern works (real subtree, real 200/
+   403/200 across manager-in-scope, manager-out-of-scope, admin), but
+   `create_course`/`publish_course_version`/`org_unit_create`/
+   `org_unit_reparent` are all still tenant+role only — a `manager` can act
+   on any of those in their tenant regardless of org unit. Same mechanism
+   (resource gets an `org_unit_id`, controller resolves `caller_org_units`
+   via `OrgHierarchyClient.myScope()` when the caller isn't admin, Rego's
+   `org_ok` rule already generalizes), just needs repeating per action. This
+   is the top item now.
 2. Ch.19 §3/§4's event side: publish `OrgUnitChanged`/`OrgUnitReparented`
    to Kafka via the outbox pattern, and give some service a reason to
-   consume them (ADR-032's cache/fallback pattern needs a real consumer to
-   be worth building, not just a TTL number).
+   consume them (ADR-032's 5-min TTL cache/fallback pattern needs a real
+   consumer to be worth building — right now `my-scope` is queried fresh,
+   uncached, on every org-scoped check, which is correct but not what §3
+   specifies).
 3. Multi-tenancy hybrid isolation (Ch.12 §2/Ch.18) — required before more
    than one real customer.
 4. Real KMS integration (Ch.40 §3), replacing `.local-kms/` — required

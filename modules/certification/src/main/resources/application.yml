@@ -35,5 +35,8 @@ management:
       exposure:
         include: health,info
 
+org-hierarchy:
+  base-url: http://localhost:8085
+
 opa:
   base-url: http://localhost:8181

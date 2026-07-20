@@ -20,7 +20,7 @@ import org.springframework.web.bind.annotation.RequestMapping
 import org.springframework.web.bind.annotation.RestController
 import java.util.UUID
 
-data class EnrollLearnerRequest(val learnerId: String, val courseId: String)
+data class EnrollLearnerRequest(val learnerId: String, val courseId: String, val orgUnitId: UUID? = null)
 data class ProgressRequest(val percentComplete: Int)
 data class EnrollmentResponse(
     val enrollmentId: UUID,
@@ -28,6 +28,7 @@ data class EnrollmentResponse(
     val learnerId: String,
     val courseId: String,
     val contentVersionId: UUID,
+    val orgUnitId: UUID?,
     val status: String,
     val progressPercent: Int,
 )
@@ -53,7 +54,7 @@ class EnrollmentController(
         val version = courseManagementClient.getCurrentVersion(request.courseId, jwt.tokenValue)
             ?: throw InvalidCourseException(request.courseId)
         val enrollment = Enrollment.enroll(
-            UUID.randomUUID(), jwt.tenantId(), request.learnerId, request.courseId, version.versionId,
+            UUID.randomUUID(), jwt.tenantId(), request.learnerId, request.courseId, version.versionId, request.orgUnitId,
         )
         repository.save(enrollment)
         return ResponseEntity.status(HttpStatus.CREATED).body(enrollment.toResponse())
@@ -98,6 +99,7 @@ private fun Enrollment.toResponse() = EnrollmentResponse(
     learnerId = learnerId,
     courseId = courseId,
     contentVersionId = contentVersionId,
+    orgUnitId = orgUnitId,
     status = status.name,
     progressPercent = progressPercent,
 )
