@@ -101,7 +101,10 @@ class CertificateController(
     ): ResponseEntity<CertificateResponse> {
         val certificate = loadOrThrow(id)
         val roles = jwt.roles()
-        val callerOrgUnits = if ("admin" !in roles && "manager" in roles) {
+        // Only resolved when the certificate actually has an org unit — one
+        // with none passes org_ok trivially, so an org-hierarchy outage
+        // shouldn't be able to block revoking an unscoped certificate.
+        val callerOrgUnits = if (certificate.orgUnitId != null && "admin" !in roles && "manager" in roles) {
             val username = jwt.getClaimAsString("preferred_username") ?: jwt.subject
             orgScopeCache.getScope(username, jwt.tokenValue)
         } else {

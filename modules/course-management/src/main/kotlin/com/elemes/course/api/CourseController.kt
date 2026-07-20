@@ -7,7 +7,8 @@ import com.elemes.common.roles
 import com.elemes.course.ContentVersion
 import com.elemes.course.Course
 import com.elemes.course.infrastructure.CourseRepository
-import com.elemes.course.infrastructure.OrgHierarchyClient
+import com.elemes.course.infrastructure.OrgScopeCache
+import com.elemes.course.infrastructure.OrgScopeUnavailableException
 import org.springframework.http.HttpStatus
 import org.springframework.http.ResponseEntity
 import org.springframework.security.core.annotation.AuthenticationPrincipal
@@ -35,7 +36,7 @@ class ContentVersionNotFoundException(id: UUID) : RuntimeException("Content vers
 class CourseController(
     private val repository: CourseRepository,
     private val authorizer: OpaAuthorizer,
-    private val orgHierarchyClient: OrgHierarchyClient,
+    private val orgScopeCache: OrgScopeCache,
 ) {
 
     /**
@@ -50,7 +51,11 @@ class CourseController(
     fun create(@AuthenticationPrincipal jwt: Jwt, @RequestBody request: CreateCourseRequest): ResponseEntity<CourseResponse> {
         val tenantId = jwt.getClaimAsString("tenant_id") ?: error("JWT is missing the required tenant_id claim")
         val roles = jwt.roles()
-        val callerOrgUnits = resolveCallerScope(roles, jwt.tokenValue)
+        // Only resolved when the request actually targets an org unit — an
+        // unscoped course passes org_ok trivially (see Rego's null-handling),
+        // so there's no reason to depend on org-hierarchy being reachable at
+        // all for a caller who isn't even asking for org-scoped behavior.
+        val callerOrgUnits = if (request.orgUnitId != null) resolveCallerScope(roles, jwt) else emptyList()
         authorizer.check(AuthzInput("create_course", tenantId, roles, callerOrgUnits = callerOrgUnits, resourceOrgUnit = request.orgUnitId?.toString()))
         val course = repository.create(UUID.randomUUID(), tenantId, request.code, request.title, request.initialContentHash, request.orgUnitId)
         return ResponseEntity.status(HttpStatus.CREATED).body(course.toResponse())
@@ -77,7 +82,10 @@ class CourseController(
     ): ResponseEntity<ContentVersionResponse> {
         val course = loadOrThrow(id)
         val roles = jwt.roles()
-        val callerOrgUnits = resolveCallerScope(roles, jwt.tokenValue)
+        // Same laziness as create(): a course with no orgUnitId never needs
+        // caller_org_units at all, so an org-hierarchy outage shouldn't be
+        // able to block publishing to an unscoped course.
+        val callerOrgUnits = if (course.orgUnitId != null) resolveCallerScope(roles, jwt) else emptyList()
         authorizer.check(
             AuthzInput(
                 "publish_course_version", jwt.getClaimAsString("tenant_id") ?: "", roles, course.tenantId,
@@ -111,10 +119,15 @@ class CourseController(
 
     private fun loadOrThrow(id: UUID): Course = repository.findById(id) ?: throw CourseNotFoundException(id)
 
-    /** Only resolved for "manager" (not "admin") callers — admin always stays tenant-wide, so there's no need to pay for the extra HTTP round-trip. */
-    private fun resolveCallerScope(roles: List<String>, bearerToken: String): List<String> =
+    /**
+     * Only resolved for "manager" (not "admin") callers — admin always
+     * stays tenant-wide. Ch.19 ADR-032: cached for 5 minutes per caller
+     * (see OrgScopeCache) rather than calling org-hierarchy on every check.
+     */
+    private fun resolveCallerScope(roles: List<String>, jwt: Jwt): List<String> =
         if ("admin" !in roles && "manager" in roles) {
-            orgHierarchyClient.myScope(bearerToken).map { it.toString() }
+            val username = jwt.getClaimAsString("preferred_username") ?: jwt.subject
+            orgScopeCache.getScope(username, jwt.tokenValue)
         } else {
             emptyList()
         }
@@ -132,4 +145,9 @@ class CourseExceptionHandler {
     @ExceptionHandler(ForbiddenException::class)
     fun handleForbidden(ex: ForbiddenException): ResponseEntity<Map<String, String>> =
         ResponseEntity.status(HttpStatus.FORBIDDEN).body(mapOf("error" to (ex.message ?: "forbidden")))
+
+    /** Explicit signal, not a generic 500 — org-hierarchy is unreachable and there's no cached scope to fall back to, so the decision can't be made at all. */
+    @ExceptionHandler(OrgScopeUnavailableException::class)
+    fun handleOrgScopeUnavailable(ex: OrgScopeUnavailableException): ResponseEntity<Map<String, String>> =
+        ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE).body(mapOf("error" to (ex.message ?: "org scope unavailable")))
 }

@@ -147,6 +147,14 @@ class OrgUnitController(
      * the same shape, this resolves in-process against the repository
      * rather than over HTTP — org-hierarchy already owns this data, so a
      * self-call would be pure overhead.
+     *
+     * Deliberately NOT cached, unlike those two services' Ch.19 ADR-032
+     * caches. That pattern exists to survive a *cross-service* dependency
+     * outage — but org-hierarchy resolving its own scope is a same-process
+     * DB read with no such dependency to survive; caching it would add
+     * staleness risk (a manager who just lost authority over a unit could
+     * still reparent it for up to the cache's TTL) with no corresponding
+     * resilience benefit, since there's no network call being saved.
      */
     private fun resolveCallerScope(roles: List<String>, jwt: Jwt, hierarchyType: String): List<String> =
         if ("admin" !in roles && "manager" in roles) {

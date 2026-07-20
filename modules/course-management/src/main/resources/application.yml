@@ -13,6 +13,17 @@ spring:
     schemas: course_mgmt
     create-schemas: true
     default-schema: course_mgmt
+  kafka:
+    bootstrap-servers: localhost:9092
+    consumer:
+      group-id: course-management
+      auto-offset-reset: earliest
+      # Plain String, not JsonDeserializer — this is the only topic this
+      # service consumes, so there's no default.type collision to avoid
+      # (unlike Certification, which juggles two payload types); the
+      # listener parses the JSON payload itself.
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.apache.kafka.common.serialization.StringDeserializer
   security:
     oauth2:
       resourceserver:

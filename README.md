@@ -199,6 +199,34 @@ Spring Boot services:
     unaffected throughout — revocation as admin doesn't consult the cache
     or org-hierarchy at all, so it kept working the entire time
     org-hierarchy was down.
+14. **The ADR-032 cache now covers Course Management's org-scoped actions
+    too — and a real bug this testing style caught got fixed, not just
+    logged as a known gap.** `create_course`/`publish_course_version` now
+    have the same 5-minute cache + event-invalidation as certificate
+    revocation, proven the same way: `maya` created and published a course
+    tagged with her subtree live (populating the cache), org-hierarchy was
+    killed, and a second create/publish pair against that same subtree
+    succeeded entirely from cache; org-hierarchy was restarted, a real
+    `OrgUnitChanged` event was triggered and confirmed consumed
+    (course-management's log showed the invalidation); org-hierarchy was
+    killed again and a third, never-cached create attempt correctly got
+    503. Along the way, this outage testing surfaced a real bug rather than
+    a hypothetical one: caller scope was being resolved (and thus
+    org-hierarchy depended on) for *every* manager request regardless of
+    whether the resource even had an `orgUnitId` — so creating a
+    *completely unscoped* course, which the Rego policy already treats as
+    trivially allowed via its null-handling, was still failing with 503
+    during an org-hierarchy outage for no reason. Fixed by only resolving
+    caller scope when the resource actually has an org unit to check
+    against (same fix applied to Certification's `revoke_certificate`,
+    verified by the same live course-management test but not independently
+    re-run through a second full outage cycle there — identical code shape,
+    already proven correct once). Deliberately NOT extended to
+    org-hierarchy's own `reparent` check: that resolves scope in-process
+    against its own database, not over the network, so caching it would add
+    staleness risk (a manager who just lost authority over a unit could
+    still reparent it for up to the cache's TTL) with no resilience benefit
+    to offset it, since there's no outage to survive in the first place.
 
 ## Tech stack (per the AKB's ADRs)
 
@@ -226,27 +254,28 @@ Spring Boot services:
   tenant" (e.g. a `manager` can act on any resource in their tenant, not
   just ones they were assigned).
 - **Org Hierarchy is real, feeds four real authorization decisions, publishes
-  real events, and one consumer genuinely caches against them.** The
-  closure-table model, re-parenting, and matrixed hierarchy types are
-  tested (see "What's proven" #10); `revoke_certificate`, `create_course`,
-  `publish_course_version`, and `org_unit_reparent` are all genuinely
-  org-scoped for managers (#11–12); `OrgUnitChanged`/`OrgUnitReparented`
-  now publish over Kafka via the same outbox pattern as every other
-  producer, and Certification's `my-scope` lookups are cached for 5
-  minutes (Ch.19 ADR-032) and invalidated by those events, proven under an
-  actual org-hierarchy outage, not just described (#13). `org_unit_create`
-  is the one deliberate authorization exception — a brand-new unit has no
-  target org to scope against until a separate `reparent` call attaches it
-  somewhere, so it stays tenant+role only by design, not by omission. What's
-  still not built: (1) only Certification's `revoke_certificate` path
-  consumes the cache — Course Management's `create_course`/
-  `publish_course_version` and org-hierarchy's own `reparent` still resolve
-  `my-scope` fresh on every check, uncached, so an org-hierarchy outage
-  would correctly deny those (fail-closed, same principle as
-  Certification's), but wouldn't degrade to "served from cache" the way
-  revocation now does; (2) org-unit membership itself stays a single
+  real events, and two of three eligible consumers genuinely cache against
+  them.** The closure-table model, re-parenting, and matrixed hierarchy
+  types are tested (see "What's proven" #10); `revoke_certificate`,
+  `create_course`, `publish_course_version`, and `org_unit_reparent` are
+  all genuinely org-scoped for managers (#11–12); `OrgUnitChanged`/
+  `OrgUnitReparented` publish over Kafka via the same outbox pattern as
+  every other producer, and both Certification's and Course Management's
+  `my-scope` lookups are cached for 5 minutes (Ch.19 ADR-032) and
+  invalidated by those events, proven under actual org-hierarchy outages,
+  not just described (#13–14). Scope resolution is also lazy in both
+  services now — a resource with no `orgUnitId` never triggers a
+  cache/org-hierarchy dependency at all, a real bug the outage testing
+  caught (see #14). `org_unit_create` is the one deliberate authorization
+  exception — a brand-new unit has no target org to scope against until a
+  separate `reparent` call attaches it somewhere, so it stays tenant+role
+  only by design, not by omission. `org_unit_reparent` is the one
+  deliberate *caching* exception — org-hierarchy resolves its own scope
+  in-process against its own database, not over the network, so there's no
+  outage to survive and caching it would only add staleness risk. What's
+  still not built: (1) org-unit membership itself stays a single
   `managerUserId` field on each unit — no real HRIS/directory sync behind
-  any of it; (3) the cache invalidation is coarse (any org-unit event
+  any of it; (2) the cache invalidation is coarse (any org-unit event
   clears the *entire* cache, not just entries for managers actually
   affected by that specific change) — correct, since a false cache-clear
   just costs one extra live lookup, but not the fine-grained invalidation
@@ -431,7 +460,7 @@ modules/
                            EventSourcedAggregate, JdbcOutboxStore + OutboxPoller (transactional outbox),
                            {Assessment,Enrollment}EventMessage (Published Language), Jwt.tenantId()/roles(),
                            OpaAuthorizer (queries OPA over HTTP)
-  course-management/      plain CRUD Course service + Ch.12 §7 hash-addressed, insert-only content versioning + OrgHierarchyClient (Ch.19-scoped create/publish)
+  course-management/      plain CRUD Course service + Ch.12 §7 hash-addressed, insert-only content versioning + OrgScopeCache (Ch.19 ADR-032, 5-min TTL, fail-closed) + Kafka consumer for cache invalidation
   assignment-enrollment/  event-sourced Enrollment aggregate + REST API + outbox-backed Kafka producer/consumer
   assessment/              event-sourced Assessment aggregate + REST API + outbox-backed Kafka producer
   certification/           event-sourced Certificate aggregate (pins content version + signs it) + REST API + 2 Kafka consumers (EnrollmentEventMessage, OrgUnitEventMessage) + local signing + OrgScopeCache (Ch.19 ADR-032, 5-min TTL, fail-closed)
@@ -473,22 +502,23 @@ doesn't publish.
 
 ## Next increments, in order
 
-1. **Extend the ADR-032 cache to Course Management and org-hierarchy's own
-   reparent check.** Certification's `revoke_certificate` path is cached
-   and event-invalidated (see "What's proven" #13); `create_course`/
-   `publish_course_version` (Course Management) and `org_unit_reparent`
-   (org-hierarchy itself) still resolve `my-scope` fresh on every single
-   check. Same `OrgScopeCache`-shaped component, same `OrgUnitEventMessage`
-   topic already exists to drive invalidation — just needs repeating in two
-   more places. This is the top item now.
-2. Multi-tenancy hybrid isolation (Ch.12 §2/Ch.18) — required before more
-   than one real customer.
-3. Real KMS integration (Ch.40 §3), replacing `.local-kms/` — required
+1. **Multi-tenancy hybrid isolation** (Ch.12 §2/Ch.18) — required before
+   more than one real customer. Everything in this codebase now correctly
+   assumes a single pooled tenant model; Ch.18's control plane and the
+   silo option don't exist yet. This is the top item now — the Ch.19 org-
+   scoping + caching thread (creation, authoring, revocation, event
+   publishing, ADR-032 caching with proper fail-closed semantics, and a
+   real bug caught by outage testing) is a coherent, closed arc as of
+   "What's proven" #10–14; the one intentionally-open piece left in it
+   (org-unit membership as a bare `managerUserId` field, no real HRIS
+   sync) isn't worth chasing further without a real directory-sync
+   requirement driving it.
+2. Real KMS integration (Ch.40 §3), replacing `.local-kms/` — required
    before any certificate here means anything legally.
-4. Explicit outbox dedup/processed-message tracking on the consumer side,
+3. Explicit outbox dedup/processed-message tracking on the consumer side,
    tightening the "guards happen to make this safe" idempotency story noted
    above into something more deliberate.
-5. Learning Paths (Ch.21) as an actual multi-step concept, so the
+4. Learning Paths (Ch.21) as an actual multi-step concept, so the
    certificate's realized branch/step sequence (Ch.21 §7) has something real
    to record — content-version pinning is done, this is the remaining half
    of that chapter's requirement.
