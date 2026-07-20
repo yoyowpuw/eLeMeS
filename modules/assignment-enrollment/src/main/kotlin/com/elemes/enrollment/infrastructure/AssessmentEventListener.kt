@@ -5,6 +5,7 @@ import com.elemes.common.AssessmentEventTopics
 import com.elemes.common.ProcessedMessageRecord
 import com.elemes.common.ProcessedMessageStore
 import com.elemes.common.TenantContext
+import com.elemes.enrollment.EnrollmentStatus
 import org.slf4j.LoggerFactory
 import org.springframework.kafka.annotation.KafkaListener
 import org.springframework.stereotype.Component
@@ -19,6 +20,7 @@ import org.springframework.stereotype.Component
 class AssessmentEventListener(
     private val repository: EnrollmentRepository,
     private val processedMessageStore: ProcessedMessageStore,
+    private val pathProgressService: PathProgressService,
 ) {
 
     private val log = LoggerFactory.getLogger(javaClass)
@@ -52,7 +54,15 @@ class AssessmentEventListener(
                     "AssessmentFailed" -> enrollment.failGrading(message.assessmentId, message.score ?: 0)
                     else -> return // AssessmentStarted/Graded don't change Enrollment's own state
                 }
-                repository.save(enrollment, ProcessedMessageRecord(message.messageId, message.tenantId, consumerName))
+                // Ch.21 §2: GradingPassed is one of the two completion triggers
+                // (the other is /complete, ContentCompleted) — an enrollment
+                // tagged with a pathProgressId auto-advances here too, exactly
+                // like the HTTP-triggered path. See PathProgressService's doc
+                // comment for why this Kafka-thread call needs no bearer token.
+                val pathContext = if (enrollment.status == EnrollmentStatus.COMPLETED) {
+                    pathProgressService.onEnrollmentCompleted(enrollment)
+                } else null
+                repository.save(enrollment, ProcessedMessageRecord(message.messageId, message.tenantId, consumerName), pathContext)
             } catch (ex: IllegalStateException) {
                 // At-least-once Kafka delivery means this handler can be invoked more
                 // than once for the same upstream event. A duplicate lands here as an

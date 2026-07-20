@@ -22,6 +22,16 @@ data class EnrollmentEventMessage(
     /** Ch.19: the learner's org unit, if any — lets Certification scope manager-initiated revocation to their own subtree. */
     val orgUnitId: UUID? = null,
     val score: Int?,
+    /**
+     * Ch.21 §7 / Ch.26 Blue Team addendum: set only on the completion event
+     * for a Learning Path's FINAL step — carries the realized step sequence
+     * so Certification can bind it into the certificate it's about to issue.
+     * Absent (null) for both direct course enrollments and non-final path
+     * steps, which complete normally with no path-level side effect here.
+     */
+    val pathId: UUID? = null,
+    val pathVersionId: UUID? = null,
+    val realizedStepCourseIds: List<UUID>? = null,
     val occurredAt: Instant,
 )
 

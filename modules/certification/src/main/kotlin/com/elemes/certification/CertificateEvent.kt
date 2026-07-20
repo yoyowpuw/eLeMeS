@@ -15,10 +15,13 @@ sealed interface CertificateEvent {
  * version pinned at enrollment time (Ch.21 §7 — not "whatever's current
  * now"), score, and issuance time as an immutable record, digitally signed
  * (Ch.26 §3 ADR-043) rather than checksummed, so an exported certificate
- * remains verifiably authentic outside this platform's control. Realized
- * branch/step sequence within a multi-step path (also Ch.21 §7) still isn't
- * modeled — Learning Paths (Ch.21) don't exist as a concept yet, only flat
- * course enrollment does. Tracked as the next gap, not silently dropped.
+ * remains verifiably authentic outside this platform's control. When this
+ * certificate closes out a Learning Path's final step, `pathId`/
+ * `pathVersionId`/`realizedStepCourseIds` capture the Ch.21 §7 / Ch.26 Blue
+ * Team addendum requirement — which branch was actually taken, not just
+ * that *a* certificate was issued — and are part of the signed payload
+ * (see CertificatePayload.canonical), so tampering with the realized
+ * sequence after the fact is detectable exactly like tampering with score.
  */
 data class CertificateIssued(
     override val certificateId: UUID,
@@ -30,6 +33,10 @@ data class CertificateIssued(
     /** Ch.19: the learner's org unit at enrollment time, if any — not part of the signed payload, purely an authorization attribute for manager-scoped revocation. */
     val orgUnitId: UUID? = null,
     val score: Int?,
+    /** Null for a direct-course enrollment or a non-final path step (neither issues a path-aware certificate); set together, never independently. */
+    val pathId: UUID? = null,
+    val pathVersionId: UUID? = null,
+    val realizedStepCourseIds: List<UUID>? = null,
     val signature: String,
     override val occurredAt: Instant,
 ) : CertificateEvent

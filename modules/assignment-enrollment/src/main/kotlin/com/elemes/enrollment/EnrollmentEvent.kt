@@ -26,6 +26,8 @@ data class LearnerEnrolled(
     val contentVersionId: UUID,
     /** Ch.19: which org unit this learner belongs to, if any — opt-in, propagated downstream to Certification for manager-scoped authorization. */
     val orgUnitId: UUID? = null,
+    /** Ch.21 §2: set when this enrollment is one step of a Learning Path (created by PathProgressService, not directly by a learner) — null for a plain direct-course enrollment. */
+    val pathProgressId: UUID? = null,
     override val occurredAt: Instant = Instant.now(),
 ) : EnrollmentEvent
 

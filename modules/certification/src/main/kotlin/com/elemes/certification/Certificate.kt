@@ -26,6 +26,12 @@ class Certificate private constructor(
         private set
     var score: Int? = null
         private set
+    var pathId: UUID? = null
+        private set
+    var pathVersionId: UUID? = null
+        private set
+    var realizedStepCourseIds: List<UUID>? = null
+        private set
     lateinit var signature: String
         private set
     lateinit var issuedAt: Instant
@@ -45,11 +51,15 @@ class Certificate private constructor(
             score: Int?,
             signature: String,
             issuedAt: Instant,
+            pathId: UUID? = null,
+            pathVersionId: UUID? = null,
+            realizedStepCourseIds: List<UUID>? = null,
         ): Certificate {
             val certificate = Certificate(certificateId)
             certificate.raise(
                 CertificateIssued(
-                    certificateId, tenantId, enrollmentId, learnerId, courseId, contentVersionId, orgUnitId, score, signature, issuedAt,
+                    certificateId, tenantId, enrollmentId, learnerId, courseId, contentVersionId, orgUnitId, score,
+                    pathId, pathVersionId, realizedStepCourseIds, signature, issuedAt,
                 )
             )
             return certificate
@@ -78,6 +88,9 @@ class Certificate private constructor(
                 contentVersionId = event.contentVersionId
                 orgUnitId = event.orgUnitId
                 score = event.score
+                pathId = event.pathId
+                pathVersionId = event.pathVersionId
+                realizedStepCourseIds = event.realizedStepCourseIds
                 signature = event.signature
                 issuedAt = event.occurredAt
                 status = CertificateStatus.ISSUED

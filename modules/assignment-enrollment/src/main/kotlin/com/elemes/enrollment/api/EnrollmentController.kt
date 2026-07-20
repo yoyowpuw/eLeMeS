@@ -6,8 +6,10 @@ import com.elemes.common.OpaAuthorizer
 import com.elemes.common.roles
 import com.elemes.common.tenantId
 import com.elemes.enrollment.Enrollment
+import com.elemes.enrollment.EnrollmentStatus
 import com.elemes.enrollment.infrastructure.CourseManagementClient
 import com.elemes.enrollment.infrastructure.EnrollmentRepository
+import com.elemes.enrollment.infrastructure.PathProgressService
 import org.springframework.http.HttpStatus
 import org.springframework.http.ResponseEntity
 import org.springframework.security.core.annotation.AuthenticationPrincipal
@@ -42,6 +44,7 @@ class EnrollmentController(
     private val repository: EnrollmentRepository,
     private val courseManagementClient: CourseManagementClient,
     private val authorizer: OpaAuthorizer,
+    private val pathProgressService: PathProgressService,
 ) {
 
     @PostMapping
@@ -71,9 +74,25 @@ class EnrollmentController(
         @RequestBody request: ProgressRequest,
     ): ResponseEntity<EnrollmentResponse> = mutate(jwt, id) { it.recordProgress(request.percentComplete) }
 
+    /**
+     * Ch.21 §2: the no-assessment completion path also drives path
+     * advancement — an enrollment tagged with a `pathProgressId` (created
+     * via `/path-enrollments`, never directly by a learner) auto-advances
+     * to its next step, or — on the final step — attaches the realized step
+     * sequence onto this completion event for Certification to pick up.
+     * See PathProgressService.onEnrollmentCompleted's doc comment.
+     */
     @PostMapping("/{id}/complete")
-    fun complete(@AuthenticationPrincipal jwt: Jwt, @PathVariable id: UUID): ResponseEntity<EnrollmentResponse> =
-        mutate(jwt, id) { it.complete() }
+    fun complete(@AuthenticationPrincipal jwt: Jwt, @PathVariable id: UUID): ResponseEntity<EnrollmentResponse> {
+        val enrollment = loadOrThrow(id)
+        authorizer.check(AuthzInput("read_enrollment", jwt.tenantId().value, jwt.roles(), enrollment.tenantId.value))
+        enrollment.complete()
+        val pathContext = if (enrollment.status == EnrollmentStatus.COMPLETED) {
+            pathProgressService.onEnrollmentCompleted(enrollment)
+        } else null
+        repository.save(enrollment, pathContext = pathContext)
+        return ResponseEntity.ok(enrollment.toResponse())
+    }
 
     @GetMapping("/{id}")
     fun get(@AuthenticationPrincipal jwt: Jwt, @PathVariable id: UUID): ResponseEntity<EnrollmentResponse> {

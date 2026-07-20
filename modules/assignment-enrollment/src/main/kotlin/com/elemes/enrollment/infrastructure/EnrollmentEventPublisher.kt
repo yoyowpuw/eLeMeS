@@ -21,7 +21,7 @@ class EnrollmentEventPublisher(
     private val outboxStore: JdbcOutboxStore,
     private val objectMapper: ObjectMapper,
 ) {
-    fun enqueue(event: EnrollmentEvent, enrollment: Enrollment) {
+    fun enqueue(event: EnrollmentEvent, enrollment: Enrollment, pathContext: PathCompletionContext? = null) {
         val message = EnrollmentEventMessage(
             eventType = event::class.simpleName!!,
             enrollmentId = event.enrollmentId,
@@ -31,6 +31,9 @@ class EnrollmentEventPublisher(
             contentVersionId = enrollment.contentVersionId,
             orgUnitId = enrollment.orgUnitId,
             score = (event as? GradingPassed)?.score,
+            pathId = pathContext?.pathId,
+            pathVersionId = pathContext?.pathVersionId,
+            realizedStepCourseIds = pathContext?.realizedStepCourseIds,
             occurredAt = event.occurredAt,
         )
         outboxStore.enqueue(

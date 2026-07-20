@@ -25,6 +25,8 @@ class Enrollment private constructor(
         private set
     var orgUnitId: UUID? = null
         private set
+    var pathProgressId: UUID? = null
+        private set
     var status: EnrollmentStatus = EnrollmentStatus.ASSIGNED
         private set
     var progressPercent: Int = 0
@@ -38,9 +40,10 @@ class Enrollment private constructor(
             courseId: String,
             contentVersionId: UUID,
             orgUnitId: UUID? = null,
+            pathProgressId: UUID? = null,
         ): Enrollment {
             val enrollment = Enrollment(enrollmentId)
-            enrollment.raise(LearnerEnrolled(enrollmentId, tenantId, learnerId, courseId, contentVersionId, orgUnitId))
+            enrollment.raise(LearnerEnrolled(enrollmentId, tenantId, learnerId, courseId, contentVersionId, orgUnitId, pathProgressId))
             return enrollment
         }
 
@@ -103,6 +106,7 @@ class Enrollment private constructor(
                 courseId = event.courseId
                 contentVersionId = event.contentVersionId
                 orgUnitId = event.orgUnitId
+                pathProgressId = event.pathProgressId
                 status = EnrollmentStatus.ASSIGNED
             }
             is ContentStarted -> status = EnrollmentStatus.IN_PROGRESS

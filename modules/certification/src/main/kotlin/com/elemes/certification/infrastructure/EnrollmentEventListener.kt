@@ -60,9 +60,14 @@ class EnrollmentEventListener(
 
             val certificateId = UUID.randomUUID()
             val issuedAt = Instant.now()
+            // Ch.21 §7 / Ch.26 Blue Team addendum: present only when Enrollment
+            // marked this as a Learning Path's final step (see
+            // EnrollmentEventMessage.pathId's doc comment) — absent for a
+            // direct-course completion or a non-final path step.
             val payload = CertificatePayload.canonical(
                 certificateId, message.tenantId, message.enrollmentId, message.learnerId,
                 message.courseId, message.contentVersionId, message.score, issuedAt,
+                message.pathId, message.pathVersionId, message.realizedStepCourseIds,
             )
             val signature = signingService.sign(payload)
 
@@ -77,6 +82,9 @@ class EnrollmentEventListener(
                 score = message.score,
                 signature = signature,
                 issuedAt = issuedAt,
+                pathId = message.pathId,
+                pathVersionId = message.pathVersionId,
+                realizedStepCourseIds = message.realizedStepCourseIds,
             )
             repository.save(certificate, ProcessedMessageRecord(message.messageId, message.tenantId, consumerName))
             log.info("Issued certificate {} for enrollment {} (trigger: {})", certificateId, message.enrollmentId, message.eventType)

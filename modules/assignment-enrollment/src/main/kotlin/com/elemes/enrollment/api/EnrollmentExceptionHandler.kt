@@ -1,6 +1,7 @@
 package com.elemes.enrollment.api
 
 import com.elemes.common.ForbiddenException
+import com.elemes.enrollment.infrastructure.UnknownLearningPathException
 import org.springframework.http.HttpStatus
 import org.springframework.http.ResponseEntity
 import org.springframework.web.bind.annotation.ExceptionHandler
@@ -13,8 +14,8 @@ class EnrollmentExceptionHandler {
     fun handleNotFound(ex: EnrollmentNotFoundException): ResponseEntity<Map<String, String>> =
         ResponseEntity.status(HttpStatus.NOT_FOUND).body(mapOf("error" to (ex.message ?: "not found")))
 
-    @ExceptionHandler(InvalidCourseException::class)
-    fun handleInvalidCourse(ex: InvalidCourseException): ResponseEntity<Map<String, String>> =
+    @ExceptionHandler(InvalidCourseException::class, UnknownLearningPathException::class)
+    fun handleInvalidCourse(ex: RuntimeException): ResponseEntity<Map<String, String>> =
         ResponseEntity.status(HttpStatus.BAD_REQUEST).body(mapOf("error" to (ex.message ?: "invalid course")))
 
     @ExceptionHandler(ForbiddenException::class)

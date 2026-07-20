@@ -4,6 +4,7 @@ import com.elemes.certification.Certificate
 import com.elemes.common.EventStore
 import com.elemes.common.ProcessedMessageRecord
 import com.elemes.common.ProcessedMessageStore
+import com.fasterxml.jackson.databind.ObjectMapper
 import org.springframework.jdbc.core.JdbcTemplate
 import org.springframework.stereotype.Repository
 import org.springframework.transaction.annotation.Transactional
@@ -17,6 +18,7 @@ class CertificateRepository(
     private val mapper: CertificateEventMapper,
     private val jdbcTemplate: JdbcTemplate,
     private val processedMessageStore: ProcessedMessageStore,
+    private val objectMapper: ObjectMapper,
 ) {
     fun findById(certificateId: UUID): Certificate? {
         val envelopes = eventStore.loadEvents(certificateId)
@@ -53,8 +55,9 @@ class CertificateRepository(
         jdbcTemplate.update(
             """
             insert into certificate_projection
-                (certificate_id, tenant_id, enrollment_id, learner_id, course_id, content_version_id, org_unit_id, score, signature, status, issued_at, updated_at)
-            values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                (certificate_id, tenant_id, enrollment_id, learner_id, course_id, content_version_id, org_unit_id, score,
+                 path_id, path_version_id, realized_step_course_ids, signature, status, issued_at, updated_at)
+            values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             on conflict (certificate_id) do update set
                 status = excluded.status,
                 updated_at = excluded.updated_at
@@ -67,6 +70,9 @@ class CertificateRepository(
             certificate.contentVersionId,
             certificate.orgUnitId,
             certificate.score,
+            certificate.pathId,
+            certificate.pathVersionId,
+            certificate.realizedStepCourseIds?.let { objectMapper.writeValueAsString(it.map(UUID::toString)) },
             certificate.signature,
             certificate.status.name,
             Timestamp.from(certificate.issuedAt),

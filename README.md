@@ -16,12 +16,17 @@ Spring Boot services:
   "current version" pointer without ever touching prior version rows. Called
   synchronously by Enrollment both to validate a `courseId` exists and to
   fetch the version that's current *right now* (Ch.11 §3 Customer-Supplier
-  relationship).
+  relationship). Also owns Ch.21's `LearningPath`/`PathStep` (inlined here
+  rather than a standalone service — see "What's proven" #20), versioned the
+  same insert-only way as course content.
 - **assignment-enrollment** (`:8081`) — event-sourced Enrollment aggregate
   (Ch.12 §5), full Ch.5 §4 state machine: `Assigned → InProgress →
   (AwaitingGrading ⇄ InProgress) → Completed`. Pins the course's content
   version at `LearnerEnrolled` time (Ch.5 ADR-005, Ch.21 §7) and never
-  re-queries it. Publishes every committed event to Kafka.
+  re-queries it. Publishes every committed event to Kafka. Also drives
+  learners through a multi-step `LearningPath` (Ch.21 §2) one step-`Enrollment`
+  at a time via `PathProgress`, a plain projection reacting to this same
+  service's own completions.
 - **assessment** (`:8082`) — event-sourced Assessment aggregate (Ch.11 #9),
   auto-grades multiple-choice submissions, publishes `AssessmentSubmitted/
   Passed/Failed` onto Kafka.
@@ -32,7 +37,10 @@ Spring Boot services:
   against — not whatever's current when the certificate is issued — exposes
   independent verification, and supports append-only revocation (Ch.41 §3).
   Signing itself is KMS-backed (Ch.40 §3 ADR-066): the private key lives in
-  Vault's Transit engine, never in this process.
+  Vault's Transit engine, never in this process. The certificate closing out
+  a Learning Path's final step also signs the realized step sequence itself
+  (Ch.21 §7 / Ch.26 Blue Team addendum), not just that a certificate was
+  issued.
 - **org-hierarchy** (`:8085`) — plain CRUD org-unit service (Ch.10 §3:
   Standard tier, no event sourcing) implementing Ch.19's PostgreSQL
   closure-table hierarchy model: each `org_units` row can sit at any position
@@ -402,6 +410,46 @@ Spring Boot services:
     explicit dedup log would add ceremony with no correctness benefit.
     RLS, OPA, and Vault-backed signing were all re-verified unaffected by
     re-running the full golden path end to end afterward.
+21. **Learning Paths (Ch.21) are a real multi-step concept now, not just
+    flat course enrollment — and the resulting certificate genuinely
+    reflects which branch was taken, closing the Ch.26 CTO condition on
+    ADR-034.** `LearningPath`/`PathStep` (inlined into course-management,
+    versioned insert-only exactly like course content) define an ordered
+    sequence of courses (v1 scope: strict-sequence only — unordered-set and
+    conditional-branch modes are Ch.21 §2 capabilities deliberately deferred,
+    not silently unsupported). `POST /path-enrollments` creates a
+    `PathProgress` row and the first step's ordinary `Enrollment` in one
+    call; every subsequent step's `Enrollment` is then created automatically
+    by `PathProgressService` reacting to the prior step's completion — the
+    *same* completion trigger a direct-course enrollment already has
+    (`/complete` or Kafka `GradingPassed`), so this reuses 100% of
+    Enrollment's existing event-sourcing/outbox machinery with no new state
+    machine. A real architectural snag surfaced and got fixed here: the
+    Kafka-triggered advancement path (`AssessmentEventListener`, reacting to
+    `GradingPassed`) runs with no user token to relay to course-management's
+    OAuth2-protected API. Solved by resolving and pinning *every* step's
+    course + content version once, at path-enrollment time (`PathProgress
+    .stepPlan`), so step-to-step advancement is a pure in-process operation
+    needing no outbound HTTP call at all, from either trigger. On the final
+    step, the realized step sequence is threaded onto that step's own
+    completion event (`EnrollmentEventMessage.realizedStepCourseIds`) — no
+    second event, no ordering race against the certificate being issued —
+    and Certification binds it into the certificate's *signed* payload, not
+    just its response body. Proved end-to-end against real running
+    services: created a two-course path, enrolled a learner, completed step
+    1 (confirmed `PathProgress` advanced and step 2's `Enrollment` was
+    auto-created and auto-started via direct Postgres queries), completed
+    step 2, and got back a certificate carrying `pathId`/`pathVersionId`/
+    `realizedStepCourseIds: [course1, course2]` in that exact order. Then a
+    real tamper-detection round trip on the new claim specifically:
+    directly mutating `realizedStepCourseIds` inside the certificate's own
+    immutable event-log row flipped `/verify` to `false`; restoring it
+    flipped `/verify` back to `true` — proving the signature covers the
+    realized-path claim, not just score/course/version like before. A
+    pre-existing, pre-Ch.21 certificate was also re-verified afterward and
+    still returned `valid:true` — the payload format only grows for a
+    path-aware certificate, never changes shape for the direct-course case,
+    so no previously-issued signature was invalidated by this change.
 
 ## Tech stack (per the AKB's ADRs)
 
@@ -472,11 +520,22 @@ Spring Boot services:
   Never let the local Vault container or certificates it signs be mistaken
   for anything but a local dev artifact.
 - **Question Bank (Ch.24) is inlined into Assessment**, not its own context.
-- **Learning Paths (Ch.21) don't exist as a concept** — enrollment is always
-  against a single flat course. The certificate's realized branch/step
-  sequence (also Ch.21 §7) therefore isn't modeled either; content-*version*
-  pinning is (see "What's proven" #7), but there's no multi-step path to
-  record a realized sequence *through* yet.
+  **Learning Paths (Ch.21) are likewise inlined into course-management**,
+  not a standalone 7th service — see "What's proven" #21 for why.
+- **Learning Path step ordering is strict-sequence only.** Ch.21 §2 also
+  specifies unordered-set (complete all steps, any order) and
+  conditional-branch (next step chosen by a rule, e.g. an assessment score)
+  modes — both are modeled in the AKB but not implemented; `path_steps`
+  only has a `step_order` int, always consumed in ascending order. Adding
+  either mode later doesn't require reshaping what exists, only extending
+  it (a step "type" plus, for conditional branches, a rule to evaluate).
+- **A Learning Path re-enrollment into a newer version, after an admin
+  edits the path mid-flight, isn't implemented.** ADR-034 allows for it
+  ("unless an admin explicitly triggers a re-enrollment") but ties it to a
+  UX/tooling decision the AKB itself leaves open (Ch.21's "Open Questions").
+  A `PathProgress` in flight keeps consuming its originally-pinned version
+  to completion, which is ADR-034's *default* behavior, correctly
+  implemented — only the explicit-override path is missing.
 - **No idempotency-key handling** (Ch.13 §4) on mutation endpoints yet.
 - **Data-plane isolation (RLS), the control plane's core lifecycle, and its
   platform-vs-tenant identity separation are all real now; the silo tier
@@ -752,10 +811,6 @@ doesn't publish.
 
 ## Next increments, in order
 
-1. Learning Paths (Ch.21) as an actual multi-step concept, so the
-   certificate's realized branch/step sequence (Ch.21 §7) has something real
-   to record — content-version pinning is done, this is the remaining half
-   of that chapter's requirement.
-2. The silo tier (Ch.12 §2/Ch.18 §3) as more than tenant metadata — actually
+1. The silo tier (Ch.12 §2/Ch.18 §3) as more than tenant metadata — actually
    provisioning a dedicated cluster for a tenant crossing the threshold is
    still entirely unmodeled.

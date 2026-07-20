@@ -42,6 +42,10 @@ open_actions := {
 restricted_actions := {
 	"create_course": {"admin", "manager"},
 	"publish_course_version": {"admin", "manager"},
+	# Ch.21: same admin/manager + opt-in org-scoping shape as course
+	# create/publish — a LearningPath is just ordered Course references.
+	"create_learning_path": {"admin", "manager"},
+	"publish_path_version": {"admin", "manager"},
 	"revoke_certificate": {"admin", "manager"},
 	"org_unit_create": {"admin", "manager"},
 	"org_unit_reparent": {"admin", "manager"},
@@ -68,7 +72,7 @@ restricted_actions := {
 # "org_unit_create" is deliberately absent: a new unit is always created
 # unparented, so there's no target org unit yet to scope against — see
 # OrgUnitController.create()'s doc comment.
-org_scoped_actions := {"revoke_certificate", "create_course", "publish_course_version", "org_unit_reparent"}
+org_scoped_actions := {"revoke_certificate", "create_course", "publish_course_version", "org_unit_reparent", "create_learning_path", "publish_path_version"}
 
 # Ch.18: tenant-management actions are deliberately exempt from tenant_active
 # below. Two independent reasons stack here: (1) platform-admin's own
