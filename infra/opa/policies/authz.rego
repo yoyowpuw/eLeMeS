@@ -26,12 +26,15 @@ open_actions := {
 	"submit_assessment",
 	"read_assessment",
 	"read_certificate",
+	"read_org_unit",
 }
 
 restricted_actions := {
 	"create_course": {"admin", "manager"},
 	"publish_course_version": {"admin", "manager"},
 	"revoke_certificate": {"admin"},
+	"org_unit_create": {"admin", "manager"},
+	"org_unit_reparent": {"admin", "manager"},
 }
 
 allow if {

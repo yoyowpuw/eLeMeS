@@ -6,4 +6,5 @@ include(
     "modules:course-management",
     "modules:assessment",
     "modules:certification",
+    "modules:org-hierarchy",
 )

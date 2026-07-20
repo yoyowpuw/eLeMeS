@@ -7,7 +7,7 @@ what exists today.
 ## What this is right now
 
 **The full compliance-critical-tier golden path (Ch.11 §5) is closed, end to
-end, with a real cryptographic proof at the finish line.** Four independent
+end, with a real cryptographic proof at the finish line.** Five independent
 Spring Boot services:
 
 - **course-management** (`:8083`) — plain CRUD (Ch.10 §3: Supporting tier, no
@@ -31,6 +31,13 @@ Spring Boot services:
   (Ch.26 ADR-043) that pins the exact content version the learner enrolled
   against — not whatever's current when the certificate is issued — exposes
   independent verification, and supports append-only revocation (Ch.41 §3).
+- **org-hierarchy** (`:8085`) — plain CRUD org-unit service (Ch.10 §3:
+  Standard tier, no event sourcing) implementing Ch.19's PostgreSQL
+  closure-table hierarchy model: each `org_units` row can sit at any position
+  in any number of independent hierarchy types (`reporting-line`,
+  `cost-center`, ...) simultaneously, and re-parenting a subtree rewrites
+  only the affected closure rows in one transaction, never a migration
+  project.
 
 **What's proven, concretely — not asserted, actually run and checked:**
 1. Enrolling against a real course; an unknown `courseId` is rejected with a
@@ -101,6 +108,24 @@ Spring Boot services:
    not when it's JSON `null` — and Jackson serializes Kotlin `null` as an
    explicit `null`, not an omitted field, so the original "no resource yet"
    policy branch silently never matched until this was corrected.
+10. **Re-parenting a subtree actually rewrites only that subtree, in one
+    transaction, and matrixed (dual-hierarchy) org units really are
+    independent** (Ch.19 ADR-031) — not just claimed by the data model
+    choice. Built a 3-level `reporting-line` tree (A → B → C), then
+    re-parented B (carrying C with it) onto an unrelated root D, simulating
+    a reorg per BR-006: querying A's descendants afterward returns only A;
+    querying D's descendants returns D, B, C — the whole subtree moved
+    atomically, with no migration step and no stale rows left connecting A
+    to B or C. Separately, B was then also assigned a parent under a
+    *different* hierarchy type (`cost-center`, to unit E) without touching
+    its `reporting-line` parent at all — querying B's ancestors under each
+    hierarchy type returns a different, independent chain, which is exactly
+    what FR-009's matrixed/dual-manager reporting requires and the ADR-031
+    technology evaluation claimed a closure table (not adjacency list or
+    nested set) would deliver. Role/tenant checks on org-unit creation and
+    re-parenting were verified the same way as the other services: a
+    `learner` token gets 403, `admin` succeeds, a `globex-corp` token gets
+    403 reading an `acme-corp` org unit.
 
 ## Tech stack (per the AKB's ADRs)
 
@@ -108,7 +133,8 @@ Spring Boot services:
 |---|---|---|
 | Language/runtime | Kotlin/JVM, JDK 21 LTS (Ch.15 ADR-023) | — |
 | Framework | Spring Boot 3.3 | — (not pinned by the AKB; chosen for this scaffold) |
-| Database | PostgreSQL (Ch.12 ADR-016) | Docker, `postgres:16-alpine`, **one schema per service** (`enrollment`, `assessment`, `course_mgmt`, `certification`) — genuine per-context data ownership on one shared local instance |
+| Database | PostgreSQL (Ch.12 ADR-016) | Docker, `postgres:16-alpine`, **one schema per service** (`enrollment`, `assessment`, `course_mgmt`, `certification`, `org_hierarchy`) — genuine per-context data ownership on one shared local instance |
+| Org hierarchy model | Closure table, PostgreSQL-native (Ch.19 ADR-031) | Implemented directly — no local stand-in needed, the AKB's selected technology *is* what's running locally |
 | Event bus/store | Managed Kafka (Ch.15 ADR-024) | **Redpanda** — fully wired: assessment → enrollment → certification, published via a transactional outbox in each producer |
 | Key management | Cloud HSM/KMS (Ch.40 ADR-066) | **Local RSA keypair**, file-persisted under `.local-kms/` (gitignored) — see deferred items |
 | Object storage | S3-compatible (Ch.28 ADR-045) | MinIO in docker-compose — provisioned, still unused |
@@ -126,12 +152,18 @@ Spring Boot services:
   surface, and there's no per-resource ownership check finer than "same
   tenant" (e.g. a `manager` can act on any resource in their tenant, not
   just ones they were assigned).
-- **No Org Hierarchy (Ch.19).** Keycloak issues `learner`/`manager`/`admin`
-  realm roles (see `infra/keycloak/realm-export.json`) and they're now
-  enforced for the handful of restricted actions (course creation/publish,
-  certificate revocation) — but Ch.19's closure-table org model, and any
-  notion of management scope *within* a tenant, doesn't exist as a service
-  yet.
+- **Org Hierarchy exists but nothing else consumes it yet.** The
+  closure-table model, re-parenting, and matrixed hierarchy types are real
+  and tested (see "What's proven" #10), but two things named in Ch.19 are
+  deliberately not built: (1) `OrgUnitChanged`/`OrgUnitReparented` events
+  aren't published to Kafka yet (§4) — there's no consumer for them yet,
+  since Assignment's eligibility-computation use case (§3, ADR-032's 5-min
+  TTL cache/fallback) doesn't exist as separate logic in this codebase; (2)
+  no other service's OPA checks actually use org-unit membership yet — a
+  `manager` can still act on any resource in their own tenant, not just
+  ones within the org units they manage. Org Hierarchy is a real,
+  independently-correct building block; wiring it into the other four
+  services' authorization is the next step, not this one.
 - **Certificate-signing key is a local file, not an HSM/KMS.** `.local-kms/`
   holds a plaintext RSA private key. It is persisted across restarts purely
   so local demo certificates keep verifying — this has zero of the protection
@@ -197,11 +229,12 @@ Gradle toolchain regardless of your system `JAVA_HOME`).
 #    give it a few seconds before requesting a token)
 docker compose up -d postgres redpanda keycloak opa
 
-# 2. Run all four services (each in its own terminal, or backgrounded)
+# 2. Run all five services (each in its own terminal, or backgrounded)
 JAVA_HOME="/path/to/jdk-21" ./gradlew :modules:course-management:bootRun
 JAVA_HOME="/path/to/jdk-21" ./gradlew :modules:assessment:bootRun
 JAVA_HOME="/path/to/jdk-21" ./gradlew :modules:assignment-enrollment:bootRun
 JAVA_HOME="/path/to/jdk-21" ./gradlew :modules:certification:bootRun
+JAVA_HOME="/path/to/jdk-21" ./gradlew :modules:org-hierarchy:bootRun
 ```
 
 ```bash
@@ -244,8 +277,25 @@ curl -i -X POST localhost:8083/api/v1/courses \
   -d '{"code":"SEC-102","title":"Nope","initialContentHash":"sha256-placeholder"}'
 # -> 403 Forbidden. Get an admin1 token instead (same password grant, username=admin1)
 # and it succeeds. A token for learner-other-tenant (tenant "globex-corp",
-# password learner-other-tenant) gets 403 reading $COURSE_ID above, since it
-# belongs to "acme-corp".
+# password learner1 — note: NOT "learner-other-tenant", that's just the
+# username) gets 403 reading $COURSE_ID above, since it belongs to "acme-corp".
+
+# 6. Org Hierarchy: build a tree, then re-parent a subtree and watch it move
+ADMIN_TOKEN=$(curl -s -X POST http://localhost:8080/realms/elemes/protocol/openid-connect/token \
+  -d "grant_type=password" -d "client_id=elemes-service" -d "username=admin1" -d "password=admin1" \
+  | grep -o '"access_token":"[^"]*"' | cut -d'"' -f4)
+
+A=$(curl -s -X POST localhost:8085/api/v1/org-units -H "Content-Type: application/json" -H "Authorization: Bearer $ADMIN_TOKEN" -d '{"name":"Engineering","unitType":"division"}' | grep -o '"orgUnitId":"[^"]*"' | cut -d'"' -f4)
+D=$(curl -s -X POST localhost:8085/api/v1/org-units -H "Content-Type: application/json" -H "Authorization: Bearer $ADMIN_TOKEN" -d '{"name":"Operations","unitType":"division"}' | grep -o '"orgUnitId":"[^"]*"' | cut -d'"' -f4)
+B=$(curl -s -X POST localhost:8085/api/v1/org-units -H "Content-Type: application/json" -H "Authorization: Bearer $ADMIN_TOKEN" -d '{"name":"Platform Team","unitType":"team","managerUserId":"maya"}' | grep -o '"orgUnitId":"[^"]*"' | cut -d'"' -f4)
+
+curl -s -X POST localhost:8085/api/v1/org-units/$B/reparent -H "Content-Type: application/json" -H "Authorization: Bearer $ADMIN_TOKEN" -d "{\"newParentId\":\"$A\",\"hierarchyType\":\"reporting-line\"}"
+curl -s "localhost:8085/api/v1/org-units/$A/descendants?hierarchyType=reporting-line" -H "Authorization: Bearer $ADMIN_TOKEN"   # -> [Engineering, Platform Team]
+
+# Re-parent the whole subtree onto a different root — a bounded rewrite, not a migration project (BR-006):
+curl -s -X POST localhost:8085/api/v1/org-units/$B/reparent -H "Content-Type: application/json" -H "Authorization: Bearer $ADMIN_TOKEN" -d "{\"newParentId\":\"$D\",\"hierarchyType\":\"reporting-line\"}"
+curl -s "localhost:8085/api/v1/org-units/$A/descendants?hierarchyType=reporting-line" -H "Authorization: Bearer $ADMIN_TOKEN"   # -> [Engineering] only
+curl -s "localhost:8085/api/v1/org-units/$D/descendants?hierarchyType=reporting-line" -H "Authorization: Bearer $ADMIN_TOKEN"   # -> [Operations, Platform Team]
 ```
 
 ### Running the test suite
@@ -281,6 +331,7 @@ modules/
   assignment-enrollment/  event-sourced Enrollment aggregate + REST API + outbox-backed Kafka producer/consumer
   assessment/              event-sourced Assessment aggregate + REST API + outbox-backed Kafka producer
   certification/           event-sourced Certificate aggregate (pins content version + signs it) + REST API + Kafka consumer + local signing
+  org-hierarchy/           plain CRUD OrgUnit service + Ch.19 §2 PostgreSQL closure-table hierarchy model (multiple concurrent hierarchy types, re-parenting)
 infra/keycloak/           realm-export.json — auto-imported realm, client, tenant_id claim mapper, seeded users
 infra/opa/policies/       authz.rego — tenant isolation + role-based restricted-action rules (Ch.17 ADR-028)
 docker-compose.yml        Postgres, Redpanda, Keycloak, OPA (all used); MinIO (provisioned, unused)
@@ -318,21 +369,29 @@ doesn't publish.
 
 ## Next increments, in order
 
-1. **Org Hierarchy** (Ch.19 — closure-table model, new service).
-   Authorization itself (previous item) is done: role checks and
-   cross-tenant denial are both real and proven (see "What's proven" #9).
-   What's still missing is any notion of structure *within* a tenant — a
-   `manager` can currently act on any resource in their own tenant, with no
-   concept of which org unit or team they actually manage. This is the top
-   item now.
-2. Multi-tenancy hybrid isolation (Ch.12 §2/Ch.18) — required before more
+1. **Wire Org Hierarchy into authorization** — the other four services'
+   OPA checks still only know tenant + role, not org-unit membership. This
+   is what closes the "manager can act on any resource in their tenant"
+   gap named above: resources need an `org_unit_id`, callers need their
+   org-unit membership resolved (from `managerUserId` or a real membership
+   table, still undecided), and the Rego policy needs an `org_ok` rule
+   checking descendant-of relationships via a `resource_org_unit` /
+   `caller_org_units` input — likely by having each service query
+   org-hierarchy's `/descendants` endpoint, or by pushing org data into OPA
+   as a data document (avoids an HTTP call per authz check). This is the
+   top item now.
+2. Ch.19 §3/§4's event side: publish `OrgUnitChanged`/`OrgUnitReparented`
+   to Kafka via the outbox pattern, and give some service a reason to
+   consume them (ADR-032's cache/fallback pattern needs a real consumer to
+   be worth building, not just a TTL number).
+3. Multi-tenancy hybrid isolation (Ch.12 §2/Ch.18) — required before more
    than one real customer.
-3. Real KMS integration (Ch.40 §3), replacing `.local-kms/` — required
+4. Real KMS integration (Ch.40 §3), replacing `.local-kms/` — required
    before any certificate here means anything legally.
-4. Explicit outbox dedup/processed-message tracking on the consumer side,
+5. Explicit outbox dedup/processed-message tracking on the consumer side,
    tightening the "guards happen to make this safe" idempotency story noted
    above into something more deliberate.
-5. Learning Paths (Ch.21) as an actual multi-step concept, so the
+6. Learning Paths (Ch.21) as an actual multi-step concept, so the
    certificate's realized branch/step sequence (Ch.21 §7) has something real
    to record — content-version pinning is done, this is the remaining half
    of that chapter's requirement.

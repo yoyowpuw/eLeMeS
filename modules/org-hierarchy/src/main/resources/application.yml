@@ -1,0 +1,29 @@
+server:
+  port: 8085
+
+spring:
+  application:
+    name: org-hierarchy
+  datasource:
+    url: jdbc:postgresql://localhost:5432/elemes?currentSchema=org_hierarchy
+    username: elemes
+    password: elemes_local_dev
+  flyway:
+    enabled: true
+    schemas: org_hierarchy
+    create-schemas: true
+    default-schema: org_hierarchy
+  security:
+    oauth2:
+      resourceserver:
+        jwt:
+          issuer-uri: http://localhost:8080/realms/elemes
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+
+opa:
+  base-url: http://localhost:8181
