@@ -20,6 +20,8 @@ class Certificate private constructor(
         private set
     lateinit var courseId: String
         private set
+    lateinit var contentVersionId: UUID
+        private set
     var score: Int? = null
         private set
     lateinit var signature: String
@@ -36,13 +38,16 @@ class Certificate private constructor(
             enrollmentId: UUID,
             learnerId: String,
             courseId: String,
+            contentVersionId: UUID,
             score: Int?,
             signature: String,
             issuedAt: Instant,
         ): Certificate {
             val certificate = Certificate(certificateId)
             certificate.raise(
-                CertificateIssued(certificateId, tenantId, enrollmentId, learnerId, courseId, score, signature, issuedAt)
+                CertificateIssued(
+                    certificateId, tenantId, enrollmentId, learnerId, courseId, contentVersionId, score, signature, issuedAt,
+                )
             )
             return certificate
         }
@@ -67,6 +72,7 @@ class Certificate private constructor(
                 enrollmentId = event.enrollmentId
                 learnerId = event.learnerId
                 courseId = event.courseId
+                contentVersionId = event.contentVersionId
                 score = event.score
                 signature = event.signature
                 issuedAt = event.occurredAt

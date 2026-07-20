@@ -11,20 +11,26 @@ end, with a real cryptographic proof at the finish line.** Four independent
 Spring Boot services:
 
 - **course-management** (`:8083`) — plain CRUD (Ch.10 §3: Supporting tier, no
-  event sourcing). Called synchronously by Enrollment to validate a `courseId`
-  actually exists (Ch.11 §3 Customer-Supplier relationship).
+  event sourcing), plus Ch.12 §7 content versioning: a course's content is
+  hash-addressed and insert-only — publishing a new version moves a
+  "current version" pointer without ever touching prior version rows. Called
+  synchronously by Enrollment both to validate a `courseId` exists and to
+  fetch the version that's current *right now* (Ch.11 §3 Customer-Supplier
+  relationship).
 - **assignment-enrollment** (`:8081`) — event-sourced Enrollment aggregate
   (Ch.12 §5), full Ch.5 §4 state machine: `Assigned → InProgress →
-  (AwaitingGrading ⇄ InProgress) → Completed`. Publishes every committed
-  event to Kafka.
+  (AwaitingGrading ⇄ InProgress) → Completed`. Pins the course's content
+  version at `LearnerEnrolled` time (Ch.5 ADR-005, Ch.21 §7) and never
+  re-queries it. Publishes every committed event to Kafka.
 - **assessment** (`:8082`) — event-sourced Assessment aggregate (Ch.11 #9),
   auto-grades multiple-choice submissions, publishes `AssessmentSubmitted/
   Passed/Failed` onto Kafka.
 - **certification** (`:8084`) — event-sourced Certificate aggregate (Ch.11
   #10, Restricted-Evidentiary per Ch.40 §2). Consumes Enrollment's
   `ContentCompleted`/`GradingPassed` events, issues a PKI-signed certificate
-  (Ch.26 ADR-043), exposes independent verification, and supports append-only
-  revocation (Ch.41 §3).
+  (Ch.26 ADR-043) that pins the exact content version the learner enrolled
+  against — not whatever's current when the certificate is issued — exposes
+  independent verification, and supports append-only revocation (Ch.41 §3).
 
 **What's proven, concretely — not asserted, actually run and checked:**
 1. Enrolling against a real course; an unknown `courseId` is rejected with a
@@ -55,6 +61,17 @@ Spring Boot services:
    was issued moments later, and zero outbox rows were left stuck unpublished
    anywhere. This is the transactional outbox pattern (see below) proven
    under an actual failure, not just implemented.
+7. **The certificate pins the version that existed at enrollment time, not
+   whatever's current when it's issued.** A course was created (v1), a
+   learner enrolled (pinning v1), the course was then *republished* to v2
+   (simulating content being edited mid-enrollment), and only after that was
+   the assessment completed. The resulting certificate's `contentVersionId`
+   matched v1 — confirmed by comparing it directly against both version IDs,
+   not just trusting the field name — while v1 itself remained independently
+   fetchable from Course Management even though it was no longer "current."
+   This is Chapter 5 ADR-005 / Chapter 21 §7's entire point, demonstrated
+   against an actual version change, not a single-version happy path that
+   could never have revealed whether pinning was real.
 
 ## Tech stack (per the AKB's ADRs)
 
@@ -85,14 +102,26 @@ Spring Boot services:
   slightly stronger — an actual `enrollment_id UNIQUE` DB constraint — but
   still no explicit processed-message log.
 - **Question Bank (Ch.24) is inlined into Assessment**, not its own context.
-- **Content/path version pinning (Ch.5 ADR-005, Ch.21 §7) is not modeled.**
-  The certificate references `courseId` as a bare string because Course
-  Management has no versioning yet — the single biggest fidelity gap versus
-  what Chapter 26 actually specifies. Tracked, not silently dropped.
+- **Learning Paths (Ch.21) don't exist as a concept** — enrollment is always
+  against a single flat course. The certificate's realized branch/step
+  sequence (also Ch.21 §7) therefore isn't modeled either; content-*version*
+  pinning is (see "What's proven" #7), but there's no multi-step path to
+  record a realized sequence *through* yet.
 - **No idempotency-key handling** (Ch.13 §4) on mutation endpoints yet.
 - **Single tenant, pooled-only.** Chapter 12 §2's hybrid silo/pool model and
   Chapter 18's control plane don't exist yet.
 - **Testcontainers integration test is broken on this machine** — see below.
+
+**Operational gotcha worth knowing about:** if you experiment with schema
+changes via an IDE assistant (this repo has been used with GitHub Copilot in
+parallel with direct work) and then revert the *source* changes without also
+resetting the *database*, Flyway will refuse to boot with a checksum
+mismatch — it applied a migration whose content no longer matches what's on
+disk. Fix is `DROP SCHEMA <affected> CASCADE;` against the local Postgres
+container (or `docker compose down -v` to nuke everything) and let Flyway
+recreate it from the current source. This happened once already during
+content-version-pinning work — resolved by dropping just the `course_mgmt`
+and `certification` schemas without touching `enrollment`/`assessment`.
 
 ## Running locally
 
@@ -113,13 +142,16 @@ JAVA_HOME="/path/to/jdk-21" ./gradlew :modules:certification:bootRun
 ```bash
 # 3. Course -> Enrollment -> Assessment -> Certificate, end to end
 COURSE_ID=$(curl -s -X POST localhost:8083/api/v1/courses \
-  -H "Content-Type: application/json" -d '{"code":"SEC-101","title":"Security Awareness"}' \
+  -H "Content-Type: application/json" \
+  -d '{"code":"SEC-101","title":"Security Awareness","initialContentHash":"sha256-placeholder-v1"}' \
   | grep -o '"courseId":"[^"]*"' | cut -d'"' -f4)
 
 ENR_ID=$(curl -s -X POST localhost:8081/api/v1/enrollments \
   -H "Content-Type: application/json" -d "{\"learnerId\":\"learner-1\",\"courseId\":\"$COURSE_ID\"}" \
   | grep -o '"enrollmentId":"[^"]*"' | cut -d'"' -f4)
 curl -X POST localhost:8081/api/v1/enrollments/$ENR_ID/start
+# Response includes contentVersionId — the version pinned for this enrollment,
+# independent of whatever the course's current version becomes later.
 
 ASM_ID=$(curl -s -X POST localhost:8082/api/v1/assessments -H "Content-Type: application/json" -d "
 {\"enrollmentId\":\"$ENR_ID\",\"courseId\":\"$COURSE_ID\",\"passingScore\":70,
@@ -162,10 +194,10 @@ modules/
   common/                 shared kernel: TenantId, EventStore, GenericJdbcEventStore,
                            EventSourcedAggregate, JdbcOutboxStore + OutboxPoller (transactional outbox),
                            {Assessment,Enrollment}EventMessage (Published Language)
-  course-management/      plain CRUD Course service
+  course-management/      plain CRUD Course service + Ch.12 §7 hash-addressed, insert-only content versioning
   assignment-enrollment/  event-sourced Enrollment aggregate + REST API + outbox-backed Kafka producer/consumer
   assessment/              event-sourced Assessment aggregate + REST API + outbox-backed Kafka producer
-  certification/           event-sourced Certificate aggregate + REST API + Kafka consumer + local signing
+  certification/           event-sourced Certificate aggregate (pins content version + signs it) + REST API + Kafka consumer + local signing
 docker-compose.yml        Postgres, Redpanda (both used); MinIO (provisioned, unused)
 docs/akb/                 the 50-chapter Architecture Knowledge Base
 ```
@@ -191,16 +223,16 @@ doesn't publish.
 
 ## Next increments, in order
 
-1. **Content/path version pinning** (Ch.5 ADR-005, Ch.21 §7) — requires
-   Course Management to actually version content, and Certification to
-   reference a specific version rather than a bare `courseId`. Now the
-   biggest remaining fidelity gap versus what Chapter 26 specifies.
-2. Real auth (Ch.16), Authorization (Ch.17), full Org Hierarchy (Ch.19) —
-   required before any real tenant data touches this.
-3. Multi-tenancy hybrid isolation (Ch.12 §2/Ch.18) — required before more
+1. Real auth (Ch.16), Authorization (Ch.17), full Org Hierarchy (Ch.19) —
+   required before any real tenant data touches this. Now the top item.
+2. Multi-tenancy hybrid isolation (Ch.12 §2/Ch.18) — required before more
    than one real customer.
-4. Real KMS integration (Ch.40 §3), replacing `.local-kms/` — required
+3. Real KMS integration (Ch.40 §3), replacing `.local-kms/` — required
    before any certificate here means anything legally.
-5. Explicit outbox dedup/processed-message tracking on the consumer side,
+4. Explicit outbox dedup/processed-message tracking on the consumer side,
    tightening the "guards happen to make this safe" idempotency story noted
    above into something more deliberate.
+5. Learning Paths (Ch.21) as an actual multi-step concept, so the
+   certificate's realized branch/step sequence (Ch.21 §7) has something real
+   to record — content-version pinning is done, this is the remaining half
+   of that chapter's requirement.

@@ -11,7 +11,9 @@ object CertificatePayload {
         enrollmentId: UUID,
         learnerId: String,
         courseId: String,
+        contentVersionId: UUID,
         score: Int?,
         issuedAt: Instant,
-    ): String = listOf(certificateId, tenantId, enrollmentId, learnerId, courseId, score, issuedAt).joinToString("|")
+    ): String =
+        listOf(certificateId, tenantId, enrollmentId, learnerId, courseId, contentVersionId, score, issuedAt).joinToString("|")
 }

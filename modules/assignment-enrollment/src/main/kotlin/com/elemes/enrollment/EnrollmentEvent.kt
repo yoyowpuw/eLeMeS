@@ -22,6 +22,8 @@ data class LearnerEnrolled(
     override val tenantId: TenantId,
     val learnerId: String,
     val courseId: String,
+    /** Ch.5 ADR-005 / Ch.21 §7: pinned at enrollment time, never re-queried — this is what the eventual certificate signs. */
+    val contentVersionId: UUID,
     override val occurredAt: Instant = Instant.now(),
 ) : EnrollmentEvent
 

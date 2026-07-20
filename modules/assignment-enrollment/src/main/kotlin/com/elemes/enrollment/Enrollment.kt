@@ -21,15 +21,23 @@ class Enrollment private constructor(
         private set
     lateinit var courseId: String
         private set
+    lateinit var contentVersionId: UUID
+        private set
     var status: EnrollmentStatus = EnrollmentStatus.ASSIGNED
         private set
     var progressPercent: Int = 0
         private set
 
     companion object {
-        fun enroll(enrollmentId: UUID, tenantId: TenantId, learnerId: String, courseId: String): Enrollment {
+        fun enroll(
+            enrollmentId: UUID,
+            tenantId: TenantId,
+            learnerId: String,
+            courseId: String,
+            contentVersionId: UUID,
+        ): Enrollment {
             val enrollment = Enrollment(enrollmentId)
-            enrollment.raise(LearnerEnrolled(enrollmentId, tenantId, learnerId, courseId))
+            enrollment.raise(LearnerEnrolled(enrollmentId, tenantId, learnerId, courseId, contentVersionId))
             return enrollment
         }
 
@@ -90,6 +98,7 @@ class Enrollment private constructor(
                 _tenantId = event.tenantId
                 learnerId = event.learnerId
                 courseId = event.courseId
+                contentVersionId = event.contentVersionId
                 status = EnrollmentStatus.ASSIGNED
             }
             is ContentStarted -> status = EnrollmentStatus.IN_PROGRESS

@@ -11,13 +11,14 @@ sealed interface CertificateEvent {
 }
 
 /**
- * Ch.5 ADR-005 / Ch.26 §2: captures learner, course, score, and issuance time
- * as an immutable record, digitally signed (Ch.26 §3 ADR-043) rather than
- * checksummed, so an exported certificate remains verifiably authentic
- * outside this platform's control. Content/path *version* pinning and the
- * realized branch/step sequence (Ch.21 §7) aren't modeled yet — Course
- * Management has no versioning of its own yet either — so `courseId` is the
- * closest current proxy. Tracked as a gap, not silently dropped.
+ * Ch.5 ADR-005 / Ch.26 §2: captures learner, course, the exact content
+ * version pinned at enrollment time (Ch.21 §7 — not "whatever's current
+ * now"), score, and issuance time as an immutable record, digitally signed
+ * (Ch.26 §3 ADR-043) rather than checksummed, so an exported certificate
+ * remains verifiably authentic outside this platform's control. Realized
+ * branch/step sequence within a multi-step path (also Ch.21 §7) still isn't
+ * modeled — Learning Paths (Ch.21) don't exist as a concept yet, only flat
+ * course enrollment does. Tracked as the next gap, not silently dropped.
  */
 data class CertificateIssued(
     override val certificateId: UUID,
@@ -25,6 +26,7 @@ data class CertificateIssued(
     val enrollmentId: UUID,
     val learnerId: String,
     val courseId: String,
+    val contentVersionId: UUID,
     val score: Int?,
     val signature: String,
     override val occurredAt: Instant,

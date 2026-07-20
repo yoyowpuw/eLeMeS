@@ -15,6 +15,8 @@ data class EnrollmentEventMessage(
     val tenantId: String,
     val learnerId: String,
     val courseId: String,
+    /** Ch.5 ADR-005 / Ch.21 §7: the version pinned at enrollment time — Certification signs exactly this, not "whatever's current now." */
+    val contentVersionId: UUID,
     val score: Int?,
     val occurredAt: Instant,
 )

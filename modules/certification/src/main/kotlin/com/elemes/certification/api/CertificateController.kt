@@ -21,6 +21,7 @@ data class CertificateResponse(
     val enrollmentId: UUID,
     val learnerId: String,
     val courseId: String,
+    val contentVersionId: UUID,
     val score: Int?,
     val status: String,
     val issuedAt: String,
@@ -53,8 +54,8 @@ class CertificateController(
     fun verify(@PathVariable id: UUID): ResponseEntity<VerifyResponse> {
         val certificate = loadOrThrow(id)
         val payload = CertificatePayload.canonical(
-            certificate.certificateId, certificate.tenantId.value, certificate.enrollmentId,
-            certificate.learnerId, certificate.courseId, certificate.score, certificate.issuedAt,
+            certificate.certificateId, certificate.tenantId.value, certificate.enrollmentId, certificate.learnerId,
+            certificate.courseId, certificate.contentVersionId, certificate.score, certificate.issuedAt,
         )
         return ResponseEntity.ok(VerifyResponse(signingService.verify(payload, certificate.signature)))
     }
@@ -74,7 +75,7 @@ class CertificateController(
 }
 
 private fun Certificate.toResponse() = CertificateResponse(
-    certificateId, enrollmentId, learnerId, courseId, score, status.name, issuedAt.toString(), signature,
+    certificateId, enrollmentId, learnerId, courseId, contentVersionId, score, status.name, issuedAt.toString(), signature,
 )
 
 @RestControllerAdvice

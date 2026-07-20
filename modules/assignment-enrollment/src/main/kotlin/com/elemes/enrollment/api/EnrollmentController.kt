@@ -21,6 +21,7 @@ data class EnrollmentResponse(
     val tenantId: String,
     val learnerId: String,
     val courseId: String,
+    val contentVersionId: UUID,
     val status: String,
     val progressPercent: Int,
 )
@@ -41,10 +42,14 @@ class EnrollmentController(
 
     @PostMapping
     fun enroll(@RequestBody request: EnrollLearnerRequest): ResponseEntity<EnrollmentResponse> {
-        if (!courseManagementClient.courseExists(request.courseId)) {
-            throw InvalidCourseException(request.courseId)
-        }
-        val enrollment = Enrollment.enroll(UUID.randomUUID(), defaultTenant, request.learnerId, request.courseId)
+        // Ch.5 ADR-005 / Ch.21 §7: the CURRENT version at enrollment time is
+        // fetched once here and pinned for good — never re-queried later,
+        // even if the course is republished before this learner finishes.
+        val version = courseManagementClient.getCurrentVersion(request.courseId)
+            ?: throw InvalidCourseException(request.courseId)
+        val enrollment = Enrollment.enroll(
+            UUID.randomUUID(), defaultTenant, request.learnerId, request.courseId, version.versionId,
+        )
         repository.save(enrollment)
         return ResponseEntity.status(HttpStatus.CREATED).body(enrollment.toResponse())
     }
@@ -78,6 +83,7 @@ private fun Enrollment.toResponse() = EnrollmentResponse(
     tenantId = tenantId.value,
     learnerId = learnerId,
     courseId = courseId,
+    contentVersionId = contentVersionId,
     status = status.name,
     progressPercent = progressPercent,
 )

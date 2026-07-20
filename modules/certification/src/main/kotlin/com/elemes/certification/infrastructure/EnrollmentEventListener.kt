@@ -40,7 +40,8 @@ class EnrollmentEventListener(
         val certificateId = UUID.randomUUID()
         val issuedAt = Instant.now()
         val payload = CertificatePayload.canonical(
-            certificateId, message.tenantId, message.enrollmentId, message.learnerId, message.courseId, message.score, issuedAt,
+            certificateId, message.tenantId, message.enrollmentId, message.learnerId,
+            message.courseId, message.contentVersionId, message.score, issuedAt,
         )
         val signature = signingService.sign(payload)
 
@@ -50,6 +51,7 @@ class EnrollmentEventListener(
             enrollmentId = message.enrollmentId,
             learnerId = message.learnerId,
             courseId = message.courseId,
+            contentVersionId = message.contentVersionId,
             score = message.score,
             signature = signature,
             issuedAt = issuedAt,

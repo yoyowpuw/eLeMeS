@@ -9,4 +9,6 @@ data class Course(
     val code: String,
     val title: String,
     val createdAt: Instant,
+    /** Always set — creating a course always creates version 1 in the same transaction (Ch.12 §7). */
+    val currentVersionId: UUID,
 )
