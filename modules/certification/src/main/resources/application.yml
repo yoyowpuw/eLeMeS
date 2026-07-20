@@ -23,6 +23,11 @@ spring:
       properties:
         spring.json.value.default.type: com.elemes.common.EnrollmentEventMessage
         spring.json.trusted.packages: com.elemes.common
+  security:
+    oauth2:
+      resourceserver:
+        jwt:
+          issuer-uri: http://localhost:8080/realms/elemes
 
 management:
   endpoints:

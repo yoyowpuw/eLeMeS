@@ -5,6 +5,8 @@ import com.elemes.course.Course
 import com.elemes.course.infrastructure.CourseRepository
 import org.springframework.http.HttpStatus
 import org.springframework.http.ResponseEntity
+import org.springframework.security.core.annotation.AuthenticationPrincipal
+import org.springframework.security.oauth2.jwt.Jwt
 import org.springframework.web.bind.annotation.ExceptionHandler
 import org.springframework.web.bind.annotation.GetMapping
 import org.springframework.web.bind.annotation.PathVariable
@@ -27,14 +29,18 @@ class ContentVersionNotFoundException(id: UUID) : RuntimeException("Content vers
 @RequestMapping("/api/v1/courses")
 class CourseController(private val repository: CourseRepository) {
 
-    // Same local-dev stand-in as assignment-enrollment: no real tenancy/auth yet.
-    private val defaultTenant = "default-tenant"
-
     @PostMapping
-    fun create(@RequestBody request: CreateCourseRequest): ResponseEntity<CourseResponse> {
-        val course = repository.create(UUID.randomUUID(), defaultTenant, request.code, request.title, request.initialContentHash)
+    fun create(@AuthenticationPrincipal jwt: Jwt, @RequestBody request: CreateCourseRequest): ResponseEntity<CourseResponse> {
+        val tenantId = jwt.getClaimAsString("tenant_id") ?: error("JWT is missing the required tenant_id claim")
+        val course = repository.create(UUID.randomUUID(), tenantId, request.code, request.title, request.initialContentHash)
         return ResponseEntity.status(HttpStatus.CREATED).body(course.toResponse())
     }
+
+    // Ch.17 Authorization (not yet built) is what would verify the caller's
+    // tenant matches the resource being read here — Phase A only establishes
+    // *who* is calling, not *what tenant-scoped access* they should have.
+    // Every endpoint below still requires a valid token (SecurityConfig),
+    // just doesn't cross-check it against the resource's tenant yet.
 
     @GetMapping("/{id}")
     fun get(@PathVariable id: UUID): ResponseEntity<CourseResponse> =

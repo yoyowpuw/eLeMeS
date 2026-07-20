@@ -17,8 +17,9 @@ services:
       retries: 10
 
   # Kafka-API-compatible, single-binary, no ZooKeeper — local stand-in for the
-  # managed Kafka selected in Ch.15 ADR-024. Not yet consumed by any service;
-  # provisioned ahead of the assessment-engine increment that needs it.
+  # managed Kafka selected in Ch.15 ADR-024. Fully wired: assessment and
+  # enrollment both publish via a transactional outbox; enrollment and
+  # certification both consume.
   redpanda:
     image: docker.redpanda.com/redpandadata/redpanda:v24.2.7
     container_name: elemes-redpanda
@@ -54,6 +55,23 @@ services:
       interval: 5s
       timeout: 5s
       retries: 10
+
+  # Local stand-in for the bought CIAM platform selected in Ch.16 ADR-026
+  # (Auth0/Okta CIC/Cognito-class) — Keycloak is a real, self-hostable OIDC
+  # provider commonly used by teams to simulate their actual CIAM locally,
+  # not a custom-built auth system. Realm/client/users auto-imported from
+  # infra/keycloak/realm-export.json at startup.
+  keycloak:
+    image: quay.io/keycloak/keycloak:25.0
+    container_name: elemes-keycloak
+    command: start-dev --import-realm
+    environment:
+      KEYCLOAK_ADMIN: admin
+      KEYCLOAK_ADMIN_PASSWORD: admin
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./infra/keycloak/realm-export.json:/opt/keycloak/data/import/realm-export.json:ro
 
 volumes:
   postgres_data:

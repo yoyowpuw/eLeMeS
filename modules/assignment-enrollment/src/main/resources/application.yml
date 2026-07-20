@@ -27,6 +27,11 @@ spring:
       key-serializer: org.apache.kafka.common.serialization.StringSerializer
       # Plain String, not JsonSerializer — see assessment's application.yml comment.
       value-serializer: org.apache.kafka.common.serialization.StringSerializer
+  security:
+    oauth2:
+      resourceserver:
+        jwt:
+          issuer-uri: http://localhost:8080/realms/elemes
 
 management:
   endpoints:

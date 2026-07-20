@@ -21,6 +21,11 @@ spring:
       # pre-serialized JSON (via AssessmentEventPublisher), so the poller
       # sends raw strings — JsonSerializer would double-encode them.
       value-serializer: org.apache.kafka.common.serialization.StringSerializer
+  security:
+    oauth2:
+      resourceserver:
+        jwt:
+          issuer-uri: http://localhost:8080/realms/elemes
 
 management:
   endpoints:

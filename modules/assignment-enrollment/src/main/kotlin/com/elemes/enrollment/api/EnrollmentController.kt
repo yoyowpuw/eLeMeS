@@ -1,11 +1,13 @@
 package com.elemes.enrollment.api
 
-import com.elemes.common.TenantId
+import com.elemes.common.tenantId
 import com.elemes.enrollment.Enrollment
 import com.elemes.enrollment.infrastructure.CourseManagementClient
 import com.elemes.enrollment.infrastructure.EnrollmentRepository
 import org.springframework.http.HttpStatus
 import org.springframework.http.ResponseEntity
+import org.springframework.security.core.annotation.AuthenticationPrincipal
+import org.springframework.security.oauth2.jwt.Jwt
 import org.springframework.web.bind.annotation.GetMapping
 import org.springframework.web.bind.annotation.PathVariable
 import org.springframework.web.bind.annotation.PostMapping
@@ -36,19 +38,16 @@ class EnrollmentController(
     private val courseManagementClient: CourseManagementClient,
 ) {
 
-    // Local dev stand-in: Ch.16's bought-CIAM auth isn't wired yet, so every
-    // request is scoped to one hardcoded tenant until real auth/tenancy lands.
-    private val defaultTenant = TenantId("default-tenant")
-
     @PostMapping
-    fun enroll(@RequestBody request: EnrollLearnerRequest): ResponseEntity<EnrollmentResponse> {
+    fun enroll(@AuthenticationPrincipal jwt: Jwt, @RequestBody request: EnrollLearnerRequest): ResponseEntity<EnrollmentResponse> {
         // Ch.5 ADR-005 / Ch.21 §7: the CURRENT version at enrollment time is
         // fetched once here and pinned for good — never re-queried later,
         // even if the course is republished before this learner finishes.
-        val version = courseManagementClient.getCurrentVersion(request.courseId)
+        // The caller's own token is relayed to Course Management (token-relay).
+        val version = courseManagementClient.getCurrentVersion(request.courseId, jwt.tokenValue)
             ?: throw InvalidCourseException(request.courseId)
         val enrollment = Enrollment.enroll(
-            UUID.randomUUID(), defaultTenant, request.learnerId, request.courseId, version.versionId,
+            UUID.randomUUID(), jwt.tenantId(), request.learnerId, request.courseId, version.versionId,
         )
         repository.save(enrollment)
         return ResponseEntity.status(HttpStatus.CREATED).body(enrollment.toResponse())
@@ -68,6 +67,9 @@ class EnrollmentController(
     fun get(@PathVariable id: UUID): ResponseEntity<EnrollmentResponse> =
         ResponseEntity.ok(loadOrThrow(id).toResponse())
 
+    // Ch.17 Authorization (not yet built) is what would verify the caller's
+    // tenant/role matches this enrollment — Phase A only requires *a* valid
+    // token (enforced globally by SecurityConfig), not tenant-scoped access.
     private fun mutate(id: UUID, action: (Enrollment) -> Unit): ResponseEntity<EnrollmentResponse> {
         val enrollment = loadOrThrow(id)
         action(enrollment)

@@ -1,0 +1,78 @@
+{
+  "realm": "elemes",
+  "enabled": true,
+  "sslRequired": "none",
+  "registrationAllowed": false,
+  "clients": [
+    {
+      "clientId": "elemes-service",
+      "enabled": true,
+      "publicClient": true,
+      "directAccessGrantsEnabled": true,
+      "standardFlowEnabled": false,
+      "protocol": "openid-connect",
+      "redirectUris": ["*"],
+      "protocolMappers": [
+        {
+          "name": "tenant-id-mapper",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-usermodel-attribute-mapper",
+          "consentRequired": false,
+          "config": {
+            "userinfo.token.claim": "true",
+            "user.attribute": "tenant_id",
+            "id.token.claim": "true",
+            "access.token.claim": "true",
+            "claim.name": "tenant_id",
+            "jsonType.label": "String"
+          }
+        }
+      ]
+    }
+  ],
+  "roles": {
+    "realm": [
+      { "name": "learner" },
+      { "name": "manager" },
+      { "name": "admin" }
+    ]
+  },
+  "users": [
+    {
+      "username": "learner1",
+      "enabled": true,
+      "emailVerified": true,
+      "email": "learner1@acme-corp.example",
+      "firstName": "Learner",
+      "lastName": "One",
+      "requiredActions": [],
+      "credentials": [{ "type": "password", "value": "learner1", "temporary": false }],
+      "attributes": { "tenant_id": ["acme-corp"] },
+      "realmRoles": ["learner"]
+    },
+    {
+      "username": "admin1",
+      "enabled": true,
+      "emailVerified": true,
+      "email": "admin1@acme-corp.example",
+      "firstName": "Admin",
+      "lastName": "One",
+      "requiredActions": [],
+      "credentials": [{ "type": "password", "value": "admin1", "temporary": false }],
+      "attributes": { "tenant_id": ["acme-corp"] },
+      "realmRoles": ["admin"]
+    },
+    {
+      "username": "learner-other-tenant",
+      "enabled": true,
+      "emailVerified": true,
+      "email": "learner1@globex-corp.example",
+      "firstName": "Learner",
+      "lastName": "Globex",
+      "requiredActions": [],
+      "credentials": [{ "type": "password", "value": "learner1", "temporary": false }],
+      "attributes": { "tenant_id": ["globex-corp"] },
+      "realmRoles": ["learner"]
+    }
+  ]
+}

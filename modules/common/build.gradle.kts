@@ -15,6 +15,8 @@ dependencies {
     implementation("org.springframework:spring-context")
     implementation("org.springframework.kafka:spring-kafka")
     implementation("org.slf4j:slf4j-api")
+    implementation("org.springframework.security:spring-security-oauth2-resource-server")
+    implementation("org.springframework.security:spring-security-oauth2-jose")
 
     testImplementation(kotlin("test"))
 }

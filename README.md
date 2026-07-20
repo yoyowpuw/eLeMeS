@@ -72,6 +72,20 @@ Spring Boot services:
    This is Chapter 5 ADR-005 / Chapter 21 §7's entire point, demonstrated
    against an actual version change, not a single-version happy path that
    could never have revealed whether pinning was real.
+8. **Every request across all four services now requires a real token from
+   Keycloak** (Ch.16 ADR-026's local stand-in for a bought CIAM platform) —
+   an unauthenticated `POST /courses` gets a genuine 401, not a hypothetical
+   one. `tenant_id` is read from the token's claims, not hardcoded — the
+   whole golden path (course → enrollment → assessment → certificate) was
+   re-run with a real token for `acme-corp`, and the tenant shows up
+   correctly at every hop, including *after* two Kafka round-trips into
+   Certification. Enrollment relays the caller's own token to Course
+   Management's synchronous call (token-relay pattern) rather than using
+   separate service credentials. `/certificates/{id}/verify` and
+   `/certificates/public-key` deliberately stayed open with no token
+   required — gating them would have directly contradicted Chapter 26 §6's
+   requirement that a certificate be verifiable by a third party *without*
+   platform access.
 
 ## Tech stack (per the AKB's ADRs)
 
@@ -83,14 +97,23 @@ Spring Boot services:
 | Event bus/store | Managed Kafka (Ch.15 ADR-024) | **Redpanda** — fully wired: assessment → enrollment → certification, published via a transactional outbox in each producer |
 | Key management | Cloud HSM/KMS (Ch.40 ADR-066) | **Local RSA keypair**, file-persisted under `.local-kms/` (gitignored) — see deferred items |
 | Object storage | S3-compatible (Ch.28 ADR-045) | MinIO in docker-compose — provisioned, still unused |
-| Identity/Auth | Bought CIAM platform (Ch.16 ADR-026) | **Not implemented** — every request hits a hardcoded `default-tenant`, no auth at all |
+| Identity/Auth | Bought CIAM platform (Ch.16 ADR-026) | **Keycloak** — real OIDC, `tenant_id` custom claim, wired into all four services as OAuth2 Resource Servers |
 
 ## Deliberately deferred (read this before assuming a gap is a bug)
 
-- **No real authentication/authorization.** Every request runs as tenant
-  `default-tenant`, on every service. Not ASVS-conformant, not production-safe.
-  Explicit, agreed trade-off to prove event sourcing and the event-bus
-  architecture first.
+- **Authentication is real; authorization is not.** Every endpoint requires a
+  valid Keycloak token and derives `tenant_id` from it — but nothing yet
+  checks *what* an authenticated caller is allowed to do or *which tenant's*
+  data they should be scoped to beyond what they supply. A valid `acme-corp`
+  token can currently read/act on data belonging to any tenant if it knows
+  the ID — Chapter 17's OPA-based policy layer and per-resource tenant
+  cross-checks are what's still missing, not authentication itself. Still
+  not ASVS-conformant end to end, but the authentication half is real now.
+- **No Org Hierarchy (Ch.19), no roles enforced.** Keycloak issues
+  `learner`/`manager`/`admin` realm roles (see `infra/keycloak/realm-export.json`)
+  but no service checks them yet — every authenticated caller can hit every
+  endpoint regardless of role. Ch.19's closure-table org model doesn't exist
+  as a service either.
 - **Certificate-signing key is a local file, not an HSM/KMS.** `.local-kms/`
   holds a plaintext RSA private key. It is persisted across restarts purely
   so local demo certificates keep verifying — this has zero of the protection
@@ -123,14 +146,27 @@ recreate it from the current source. This happened once already during
 content-version-pinning work — resolved by dropping just the `course_mgmt`
 and `certification` schemas without touching `enrollment`/`assessment`.
 
+**Another gotcha, this time in Keycloak:** if you add users to
+`infra/keycloak/realm-export.json` without `firstName`, `lastName`, and
+`email`, login fails with a cryptic `"Account is not fully set up"` /
+`resolve_required_actions` error — Keycloak 25's default User Profile
+feature silently requires those fields to consider a profile complete, even
+though nothing in the realm config says so explicitly. All three seeded
+users already have them; keep that pattern for any new ones. If Keycloak's
+realm ever needs re-importing after an export-file change, the container
+must be recreated (`docker compose rm -sf keycloak && docker compose up -d
+keycloak`) — `--import-realm` uses an IGNORE_EXISTING strategy and won't
+re-apply changes to an already-imported realm on a simple restart.
+
 ## Running locally
 
 Prerequisites: Docker Desktop (WSL2 backend), JDK 21 (services target it via
 Gradle toolchain regardless of your system `JAVA_HOME`).
 
 ```bash
-# 1. Start infra
-docker compose up -d postgres redpanda
+# 1. Start infra (Keycloak's realm/client/users auto-import at startup —
+#    give it a few seconds before requesting a token)
+docker compose up -d postgres redpanda keycloak
 
 # 2. Run all four services (each in its own terminal, or backgrounded)
 JAVA_HOME="/path/to/jdk-21" ./gradlew :modules:course-management:bootRun
@@ -140,29 +176,37 @@ JAVA_HOME="/path/to/jdk-21" ./gradlew :modules:certification:bootRun
 ```
 
 ```bash
-# 3. Course -> Enrollment -> Assessment -> Certificate, end to end
+# 3. Get a real token (see infra/keycloak/realm-export.json for the seeded
+#    users — learner1/admin1 in tenant "acme-corp", plus a second-tenant user)
+TOKEN=$(curl -s -X POST http://localhost:8080/realms/elemes/protocol/openid-connect/token \
+  -d "grant_type=password" -d "client_id=elemes-service" \
+  -d "username=learner1" -d "password=learner1" \
+  | grep -o '"access_token":"[^"]*"' | cut -d'"' -f4)
+
+# 4. Course -> Enrollment -> Assessment -> Certificate, end to end, authenticated
 COURSE_ID=$(curl -s -X POST localhost:8083/api/v1/courses \
-  -H "Content-Type: application/json" \
+  -H "Content-Type: application/json" -H "Authorization: Bearer $TOKEN" \
   -d '{"code":"SEC-101","title":"Security Awareness","initialContentHash":"sha256-placeholder-v1"}' \
   | grep -o '"courseId":"[^"]*"' | cut -d'"' -f4)
 
 ENR_ID=$(curl -s -X POST localhost:8081/api/v1/enrollments \
-  -H "Content-Type: application/json" -d "{\"learnerId\":\"learner-1\",\"courseId\":\"$COURSE_ID\"}" \
+  -H "Content-Type: application/json" -H "Authorization: Bearer $TOKEN" \
+  -d "{\"learnerId\":\"learner1\",\"courseId\":\"$COURSE_ID\"}" \
   | grep -o '"enrollmentId":"[^"]*"' | cut -d'"' -f4)
-curl -X POST localhost:8081/api/v1/enrollments/$ENR_ID/start
-# Response includes contentVersionId — the version pinned for this enrollment,
-# independent of whatever the course's current version becomes later.
+curl -X POST localhost:8081/api/v1/enrollments/$ENR_ID/start -H "Authorization: Bearer $TOKEN"
+# Response's tenantId comes from the token's tenant_id claim ("acme-corp"),
+# and contentVersionId is the version pinned for this enrollment.
 
-ASM_ID=$(curl -s -X POST localhost:8082/api/v1/assessments -H "Content-Type: application/json" -d "
+ASM_ID=$(curl -s -X POST localhost:8082/api/v1/assessments -H "Content-Type: application/json" -H "Authorization: Bearer $TOKEN" -d "
 {\"enrollmentId\":\"$ENR_ID\",\"courseId\":\"$COURSE_ID\",\"passingScore\":70,
  \"questions\":[{\"questionId\":\"q1\",\"text\":\"2+2?\",\"options\":[\"3\",\"4\"],\"correctOptionIndex\":1}]}" \
   | grep -o '"assessmentId":"[^"]*"' | cut -d'"' -f4)
 curl -X POST localhost:8082/api/v1/assessments/$ASM_ID/submit \
-  -H "Content-Type: application/json" -d '{"answers":{"q1":1}}'
+  -H "Content-Type: application/json" -H "Authorization: Bearer $TOKEN" -d '{"answers":{"q1":1}}'
 
 # Two Kafka hops later (Assessment -> Enrollment -> Certification):
-curl localhost:8084/api/v1/certificates/by-enrollment/$ENR_ID
-# -> grab the certificateId, then:
+curl localhost:8084/api/v1/certificates/by-enrollment/$ENR_ID -H "Authorization: Bearer $TOKEN"
+# -> grab the certificateId, then verify WITHOUT a token — deliberately public per Ch.26 §6:
 curl localhost:8084/api/v1/certificates/{certificateId}/verify   # {"valid":true}
 ```
 
@@ -193,14 +237,21 @@ that, or run the test suite from inside WSL2 directly.
 modules/
   common/                 shared kernel: TenantId, EventStore, GenericJdbcEventStore,
                            EventSourcedAggregate, JdbcOutboxStore + OutboxPoller (transactional outbox),
-                           {Assessment,Enrollment}EventMessage (Published Language)
+                           {Assessment,Enrollment}EventMessage (Published Language), Jwt.tenantId()
   course-management/      plain CRUD Course service + Ch.12 §7 hash-addressed, insert-only content versioning
   assignment-enrollment/  event-sourced Enrollment aggregate + REST API + outbox-backed Kafka producer/consumer
   assessment/              event-sourced Assessment aggregate + REST API + outbox-backed Kafka producer
   certification/           event-sourced Certificate aggregate (pins content version + signs it) + REST API + Kafka consumer + local signing
-docker-compose.yml        Postgres, Redpanda (both used); MinIO (provisioned, unused)
+infra/keycloak/           realm-export.json — auto-imported realm, client, tenant_id claim mapper, seeded users
+docker-compose.yml        Postgres, Redpanda, Keycloak (all used); MinIO (provisioned, unused)
 docs/akb/                 the 50-chapter Architecture Knowledge Base
 ```
+
+Every service has its own `infrastructure/SecurityConfig.kt`: requires a
+valid Keycloak-issued JWT on every endpoint except `/actuator/**` (and, in
+Certification's case, the two endpoints Ch.26 §6 requires to stay public).
+The shared `Jwt.tenantId()` extension in `common` is the one place the
+`tenant_id` claim is read, so every service extracts it identically.
 
 Each service owns its own Postgres **schema** on the one shared local
 Postgres instance — genuine per-context data ownership (Ch.11) without
@@ -223,8 +274,12 @@ doesn't publish.
 
 ## Next increments, in order
 
-1. Real auth (Ch.16), Authorization (Ch.17), full Org Hierarchy (Ch.19) —
-   required before any real tenant data touches this. Now the top item.
+1. **Authorization** (Ch.17 — OPA-class policy-as-code, local sidecar) and
+   **Org Hierarchy** (Ch.19 — closure-table model, new service). Real
+   authentication (previous item) is done; nothing yet stops an
+   authenticated `acme-corp` caller from reading/acting on another tenant's
+   resources, or enforces the `learner`/`manager`/`admin` roles Keycloak
+   already issues. This is the top item now.
 2. Multi-tenancy hybrid isolation (Ch.12 §2/Ch.18) — required before more
    than one real customer.
 3. Real KMS integration (Ch.40 §3), replacing `.local-kms/` — required

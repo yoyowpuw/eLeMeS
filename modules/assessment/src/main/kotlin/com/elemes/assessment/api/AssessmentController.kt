@@ -3,9 +3,11 @@ package com.elemes.assessment.api
 import com.elemes.assessment.Assessment
 import com.elemes.assessment.Question
 import com.elemes.assessment.infrastructure.AssessmentRepository
-import com.elemes.common.TenantId
+import com.elemes.common.tenantId
 import org.springframework.http.HttpStatus
 import org.springframework.http.ResponseEntity
+import org.springframework.security.core.annotation.AuthenticationPrincipal
+import org.springframework.security.oauth2.jwt.Jwt
 import org.springframework.web.bind.annotation.ExceptionHandler
 import org.springframework.web.bind.annotation.GetMapping
 import org.springframework.web.bind.annotation.PathVariable
@@ -32,13 +34,11 @@ class AssessmentNotFoundException(id: UUID) : RuntimeException("Assessment $id n
 @RequestMapping("/api/v1/assessments")
 class AssessmentController(private val repository: AssessmentRepository) {
 
-    private val defaultTenant = TenantId("default-tenant")
-
     @PostMapping
-    fun start(@RequestBody request: StartAssessmentRequest): ResponseEntity<AssessmentResponse> {
+    fun start(@AuthenticationPrincipal jwt: Jwt, @RequestBody request: StartAssessmentRequest): ResponseEntity<AssessmentResponse> {
         val questions = request.questions.map { Question(it.questionId, it.text, it.options, it.correctOptionIndex) }
         val assessment = Assessment.start(
-            UUID.randomUUID(), defaultTenant, request.enrollmentId, request.courseId, questions, request.passingScore
+            UUID.randomUUID(), jwt.tenantId(), request.enrollmentId, request.courseId, questions, request.passingScore
         )
         repository.save(assessment)
         return ResponseEntity.status(HttpStatus.CREATED).body(assessment.toResponse())
