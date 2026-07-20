@@ -1,0 +1,31 @@
+server:
+  port: 8084
+
+spring:
+  application:
+    name: certification
+  datasource:
+    url: jdbc:postgresql://localhost:5432/elemes?currentSchema=certification
+    username: elemes
+    password: elemes_local_dev
+  flyway:
+    enabled: true
+    schemas: certification
+    create-schemas: true
+    default-schema: certification
+  kafka:
+    bootstrap-servers: localhost:9092
+    consumer:
+      group-id: certification
+      auto-offset-reset: earliest
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.springframework.kafka.support.serializer.JsonDeserializer
+      properties:
+        spring.json.value.default.type: com.elemes.common.EnrollmentEventMessage
+        spring.json.trusted.packages: com.elemes.common
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info

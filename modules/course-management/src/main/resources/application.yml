@@ -1,0 +1,21 @@
+server:
+  port: 8083
+
+spring:
+  application:
+    name: course-management
+  datasource:
+    url: jdbc:postgresql://localhost:5432/elemes?currentSchema=course_mgmt
+    username: elemes
+    password: elemes_local_dev
+  flyway:
+    enabled: true
+    schemas: course_mgmt
+    create-schemas: true
+    default-schema: course_mgmt
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info

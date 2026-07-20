@@ -1,0 +1,38 @@
+server:
+  port: 8081
+
+spring:
+  application:
+    name: assignment-enrollment
+  datasource:
+    url: jdbc:postgresql://localhost:5432/elemes?currentSchema=enrollment
+    username: elemes
+    password: elemes_local_dev
+  flyway:
+    enabled: true
+    schemas: enrollment
+    create-schemas: true
+    default-schema: enrollment
+  kafka:
+    bootstrap-servers: localhost:9092
+    consumer:
+      group-id: assignment-enrollment
+      auto-offset-reset: earliest
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.springframework.kafka.support.serializer.JsonDeserializer
+      properties:
+        spring.json.value.default.type: com.elemes.common.AssessmentEventMessage
+        spring.json.trusted.packages: com.elemes.common
+    producer:
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      # Plain String, not JsonSerializer — see assessment's application.yml comment.
+      value-serializer: org.apache.kafka.common.serialization.StringSerializer
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+
+course-management:
+  base-url: http://localhost:8083
