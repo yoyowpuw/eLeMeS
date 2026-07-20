@@ -1,0 +1,32 @@
+server:
+  port: 8086
+
+spring:
+  application:
+    name: tenant-provisioning
+  datasource:
+    url: jdbc:postgresql://localhost:5432/elemes?currentSchema=tenant_provisioning
+    # Ch.12 §2: same non-superuser role as every other service — see
+    # infra/postgres/init-app-role.sql. This service's own table isn't
+    # RLS-protected, but there's no reason to connect as the superuser.
+    username: elemes_app
+    password: elemes_app_local_dev
+  flyway:
+    enabled: true
+    schemas: tenant_provisioning
+    create-schemas: true
+    default-schema: tenant_provisioning
+  security:
+    oauth2:
+      resourceserver:
+        jwt:
+          issuer-uri: http://localhost:8080/realms/elemes
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+
+opa:
+  base-url: http://localhost:8181

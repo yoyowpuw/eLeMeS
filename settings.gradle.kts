@@ -7,4 +7,5 @@ include(
     "modules:assessment",
     "modules:certification",
     "modules:org-hierarchy",
+    "modules:tenant-provisioning",
 )

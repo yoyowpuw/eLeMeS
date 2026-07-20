@@ -7,7 +7,7 @@ what exists today.
 ## What this is right now
 
 **The full compliance-critical-tier golden path (Ch.11 §5) is closed, end to
-end, with a real cryptographic proof at the finish line.** Five independent
+end, with a real cryptographic proof at the finish line.** Six independent
 Spring Boot services:
 
 - **course-management** (`:8083`) — plain CRUD (Ch.10 §3: Supporting tier, no
@@ -38,6 +38,13 @@ Spring Boot services:
   `cost-center`, ...) simultaneously, and re-parenting a subtree rewrites
   only the affected closure rows in one transaction, never a migration
   project.
+- **tenant-provisioning** (`:8086`) — plain CRUD tenant registry (Ch.10 §3:
+  Standard tier), the Tenancy & Provisioning control-plane context Ch.18
+  names (Ch.11 #3). Owns tenant lifecycle (`PROVISIONING → ACTIVE →
+  OFFBOARDED`, no path back) and pushes each transition straight into OPA's
+  data API — every other service's authorization check consults that
+  pushed status on every single request, so offboarding a tenant revokes
+  its access everywhere immediately, not eventually.
 
 **What's proven, concretely — not asserted, actually run and checked:**
 1. Enrolling against a real course; an unknown `courseId` is rejected with a
@@ -266,6 +273,37 @@ Spring Boot services:
     tenant can no longer even prove the resource exists), but a genuine,
     observable change from what was documented in items #9–10 above for
     those specific single-resource GET endpoints.
+16. **Offboarding a tenant revokes its access everywhere, immediately —
+    proven by actually offboarding a real seeded tenant mid-session and
+    watching every one of its callers get locked out at once, not by
+    reading the policy.** `acme-corp` was registered into the new tenant
+    registry (`PROVISIONING`), and — a real bootstrapping bug surfaced
+    immediately — `admin1` couldn't even activate their own tenant, because
+    the first cut of the `tenant_active` check applied to *every* action
+    including the one meant to establish it, a deadlock no seeded tenant
+    could ever escape. Fixed by exempting the four tenant-lifecycle actions
+    themselves from the check (a real platform-ops identity would sit
+    outside any tenant's own status entirely; this codebase has no such
+    identity, so the exemption is scoped narrowly instead). A second bug
+    surfaced right after, more subtle: the control plane pushed tenant
+    status to OPA at `data.elemes.tenants.*` (matching the Rego file's own
+    `package elemes.authz` name) while the policy read from `data.tenants`
+    — two unrelated paths, a package declaration has no bearing on what a
+    `data.X` reference elsewhere resolves to — so the very first test
+    silently passed for the wrong reason (an always-undefined path reads as
+    "unknown tenant, allow"), caught by querying OPA's raw data document at
+    the exact path the policy reads and finding it empty. With both fixed:
+    `acme-corp` was activated (real 200, real access restored), then
+    offboarded — and immediately after, with no delay and no service
+    restart, `admin1` got 403 creating a course, `admin1` got 403 reading a
+    course they already owned, and `learner1` (a completely different role,
+    same tenant) got 403 on the same read too — the block isn't role- or
+    action-specific, it's tenant-wide. `globex-corp`, an entirely unrelated
+    tenant, was unaffected throughout (still got a normal RLS-driven 404 on
+    a course that was never theirs, not a 403). `acme-corp` was restored to
+    `ACTIVE` directly afterward (the app's own state machine has no path
+    back from `OFFBOARDED` by design — a direct DB/OPA fix, same pattern as
+    other test-environment restores in this project, not a feature).
 
 ## Tech stack (per the AKB's ADRs)
 
@@ -275,6 +313,7 @@ Spring Boot services:
 | Framework | Spring Boot 3.3 | — (not pinned by the AKB; chosen for this scaffold) |
 | Database | PostgreSQL (Ch.12 ADR-016) | Docker, `postgres:16-alpine`, **one schema per service** (`enrollment`, `assessment`, `course_mgmt`, `certification`, `org_hierarchy`) — genuine per-context data ownership on one shared local instance |
 | Org hierarchy model | Closure table, PostgreSQL-native (Ch.19 ADR-031) | Implemented directly — no local stand-in needed, the AKB's selected technology *is* what's running locally |
+| Tenancy control plane | Ch.18 ADR-029: separate control/data plane, single provisioning model | Implemented directly as `tenant-provisioning` — data plane routing is trivial locally (one pooled Postgres cluster), so this is mostly the registry/lifecycle half of ADR-029, not the multi-region routing half |
 | Event bus/store | Managed Kafka (Ch.15 ADR-024) | **Redpanda** — fully wired: assessment → enrollment → certification, and org-hierarchy → certification (cache invalidation), all published via a transactional outbox in each producer |
 | Key management | Cloud HSM/KMS (Ch.40 ADR-066) | **Local RSA keypair**, file-persisted under `.local-kms/` (gitignored) — see deferred items |
 | Object storage | S3-compatible (Ch.28 ADR-045) | MinIO in docker-compose — provisioned, still unused |
@@ -336,15 +375,23 @@ Spring Boot services:
   pinning is (see "What's proven" #7), but there's no multi-step path to
   record a realized sequence *through* yet.
 - **No idempotency-key handling** (Ch.13 §4) on mutation endpoints yet.
-- **Pooled-tier data-plane isolation is real (RLS, see "What's proven" #15);
-  the rest of Ch.12 §2/Ch.18 isn't.** Every pooled tenant currently shares
-  the same Postgres cluster with database-enforced row isolation — but the
-  **silo tier** (dedicated cluster for tenants over the size/regulatory
-  threshold) doesn't exist, there's no **control plane** (Ch.18 — tenant
-  registry, provisioning workflow, config, offboarding) as its own
-  service, and there's genuinely only one tenant's worth of real data in
-  this environment regardless (`acme-corp`/`globex-corp` are both just
-  rows in the same pooled cluster, not separate infrastructure).
+- **Data-plane isolation (RLS) and the control plane's core lifecycle are
+  both real now; the silo tier and everything else Ch.18 names around
+  provisioning aren't.** Pooled tenants get database-enforced row isolation
+  (What's proven #15), and the control plane (Ch.18 — tenant registry,
+  `PROVISIONING → ACTIVE → OFFBOARDED` lifecycle) genuinely revokes access
+  platform-wide the instant a tenant is offboarded (#16) — but the **silo
+  tier** (a dedicated cluster for tenants over the size/regulatory
+  threshold) is metadata-only, `isolationTier: SILO` on a tenant record
+  doesn't actually provision separate infrastructure anywhere; there's no
+  SSO/SCIM/HRIS configuration step in the provisioning lifecycle (Ch.18 §4
+  names it, `activate()` just flips a status); tenant-provisioning's own
+  admin surface reuses the platform's ordinary "admin" role rather than a
+  separate platform-ops identity, so in this codebase a tenant's own admin
+  can provision/offboard *any* tenant, not just their own — a real gap, not
+  a stylistic one, documented rather than hidden; and there's genuinely
+  only two tenants' worth of real data in this environment regardless
+  (`acme-corp`/`globex-corp`, both in the same pooled cluster).
 - **Testcontainers integration test is broken on this machine** — see below.
 
 **Operational gotcha worth knowing about:** if you experiment with schema
@@ -396,6 +443,23 @@ connects as instead — `select rolsuper, rolbypassrls from pg_roles` is the
 one-line check that would have caught this immediately, worth running
 before trusting any RLS setup against a role you didn't create yourself.
 
+**An OPA data-API gotcha, the second one this project has hit:** a Rego
+file's `package elemes.authz` declaration only controls where **that
+file's own rules** live in the data tree (`data.elemes.authz.*`) — it has
+zero effect on what a plain `data.X` reference *inside* a rule body
+resolves to, since `data` references are always absolute from the root.
+Pushing external data to `PUT /v1/data/elemes/tenants/<id>` while a rule
+reads `data.tenants[...]` (no `elemes` prefix) means the rule is reading a
+path nothing ever writes to — permanently undefined, which read as
+"unknown tenant" in this policy's fallback logic and let every request
+through regardless of actual tenant status. No error, no warning — it just
+silently does the wrong thing forever. Caught by querying OPA's raw data
+document (`GET /v1/data/tenants/<id>`) directly and finding it empty right
+after a push that should have populated it; worth doing before trusting
+any policy branch that depends on externally-pushed data, the same way the
+existing Rego-vs-Kotlin gotcha above says to test the policy directly
+before suspecting the calling code.
+
 ## Running locally
 
 Prerequisites: Docker Desktop (WSL2 backend), JDK 21 (services target it via
@@ -412,12 +476,13 @@ Gradle toolchain regardless of your system `JAVA_HOME`).
 #       grant create, connect on database elemes to elemes_app;"
 docker compose up -d postgres redpanda keycloak opa
 
-# 2. Run all five services (each in its own terminal, or backgrounded)
+# 2. Run all six services (each in its own terminal, or backgrounded)
 JAVA_HOME="/path/to/jdk-21" ./gradlew :modules:course-management:bootRun
 JAVA_HOME="/path/to/jdk-21" ./gradlew :modules:assessment:bootRun
 JAVA_HOME="/path/to/jdk-21" ./gradlew :modules:assignment-enrollment:bootRun
 JAVA_HOME="/path/to/jdk-21" ./gradlew :modules:certification:bootRun
 JAVA_HOME="/path/to/jdk-21" ./gradlew :modules:org-hierarchy:bootRun
+JAVA_HOME="/path/to/jdk-21" ./gradlew :modules:tenant-provisioning:bootRun
 ```
 
 ```bash
@@ -533,6 +598,7 @@ modules/
   assessment/              event-sourced Assessment aggregate + REST API + outbox-backed Kafka producer
   certification/           event-sourced Certificate aggregate (pins content version + signs it) + REST API + 2 Kafka consumers (EnrollmentEventMessage, OrgUnitEventMessage) + local signing + OrgScopeCache (Ch.19 ADR-032, 5-min TTL, fail-closed)
   org-hierarchy/           plain CRUD OrgUnit service + Ch.19 §2 PostgreSQL closure-table hierarchy model (multiple concurrent hierarchy types, re-parenting) + outbox-backed Kafka producer
+  tenant-provisioning/     plain CRUD tenant registry (Ch.18 control plane) + OpaDataPusher (pushes lifecycle status into OPA's data API)
 infra/keycloak/           realm-export.json — auto-imported realm, client, tenant_id claim mapper, seeded users
 infra/opa/policies/       authz.rego — tenant isolation + role-based restricted-action rules (Ch.17 ADR-028)
 infra/postgres/           init-app-role.sql — creates the non-superuser elemes_app role RLS depends on (Ch.12 §2)
@@ -571,12 +637,13 @@ doesn't publish.
 
 ## Next increments, in order
 
-1. **Ch.18's control plane** (tenant registry, provisioning workflow,
-   config, offboarding) as its own service, and the **silo tier** for
-   large/regulated tenants — the pooled-tier *data-plane* isolation half of
-   Ch.12 §2 is done and proven with a real RLS bypass/round-trip test (see
-   "What's proven" #15); what's left is everything Ch.18 actually owns.
-   This is the top item now.
+1. **A real platform-ops identity for tenant-provisioning**, separate from
+   any single tenant's own "admin" role — right now a tenant's admin can
+   provision or offboard *any* tenant, including ones they have no business
+   relationship to, which is the sharpest documented gap left from this
+   increment. Needs either a dedicated Keycloak realm/client for platform
+   staff or a distinct role that OPA's `tenant_management_actions` rule can
+   check for instead of reusing `"admin"` verbatim.
 2. Real KMS integration (Ch.40 §3), replacing `.local-kms/` — required
    before any certificate here means anything legally.
 3. Explicit outbox dedup/processed-message tracking on the consumer side,
@@ -586,3 +653,6 @@ doesn't publish.
    certificate's realized branch/step sequence (Ch.21 §7) has something real
    to record — content-version pinning is done, this is the remaining half
    of that chapter's requirement.
+5. The silo tier (Ch.12 §2/Ch.18 §3) as more than tenant metadata — actually
+   provisioning a dedicated cluster for a tenant crossing the threshold is
+   still entirely unmodeled.
