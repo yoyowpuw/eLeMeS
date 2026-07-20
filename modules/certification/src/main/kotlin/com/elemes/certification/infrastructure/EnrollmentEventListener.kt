@@ -21,7 +21,7 @@ import java.util.UUID
 @Component
 class EnrollmentEventListener(
     private val repository: CertificateRepository,
-    private val signingService: LocalSigningService,
+    private val signingService: VaultSigningService,
 ) {
     private val log = LoggerFactory.getLogger(javaClass)
     private val completionEventTypes = setOf("ContentCompleted", "GradingPassed")

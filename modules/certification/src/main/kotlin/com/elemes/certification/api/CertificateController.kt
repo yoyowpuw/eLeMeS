@@ -3,9 +3,9 @@ package com.elemes.certification.api
 import com.elemes.certification.Certificate
 import com.elemes.certification.CertificatePayload
 import com.elemes.certification.infrastructure.CertificateRepository
-import com.elemes.certification.infrastructure.LocalSigningService
 import com.elemes.certification.infrastructure.OrgScopeCache
 import com.elemes.certification.infrastructure.OrgScopeUnavailableException
+import com.elemes.certification.infrastructure.VaultSigningService
 import com.elemes.common.AuthzInput
 import com.elemes.common.ForbiddenException
 import com.elemes.common.OpaAuthorizer
@@ -48,7 +48,7 @@ class NoCertificateForEnrollmentException(enrollmentId: UUID) : RuntimeException
 @RequestMapping("/api/v1/certificates")
 class CertificateController(
     private val repository: CertificateRepository,
-    private val signingService: LocalSigningService,
+    private val signingService: VaultSigningService,
     private val authorizer: OpaAuthorizer,
     private val orgScopeCache: OrgScopeCache,
 ) {
@@ -125,8 +125,24 @@ class CertificateController(
         return ResponseEntity.ok(certificate.toResponse())
     }
 
+    /**
+     * Ch.26 §6: every key version's public key, not just the latest —
+     * Vault's own signature format (`vault:v<N>:...`) embeds which version
+     * produced a given signature, and a third party verifying independently
+     * (without calling this platform's own `/verify`) needs the matching
+     * historical key, not whatever's current after a rotation. Deliberately
+     * public, same as `/verify` (see SecurityConfig).
+     */
     @GetMapping("/public-key")
-    fun publicKey(): ResponseEntity<Map<String, String>> = ResponseEntity.ok(mapOf("publicKeyBase64" to signingService.publicKeyBase64))
+    fun publicKey(): ResponseEntity<Map<String, Any>> =
+        ResponseEntity.ok(mapOf("publicKeysByVersion" to signingService.publicKeysByVersion(), "latestVersion" to signingService.latestKeyVersion()))
+
+    /** Ch.40 §3: native key rotation, admin-only — old signatures stay verifiable (see VaultSigningService's doc comment), only certificates signed from this point on use the new version. */
+    @PostMapping("/signing-key/rotate")
+    fun rotateSigningKey(@AuthenticationPrincipal jwt: Jwt): ResponseEntity<Map<String, Int>> {
+        authorizer.check(AuthzInput("rotate_signing_key", jwt.tenantId().value, jwt.roles()))
+        return ResponseEntity.ok(mapOf("newVersion" to signingService.rotate()))
+    }
 
     private fun loadOrThrow(id: UUID): Certificate = repository.findById(id) ?: throw CertificateNotFoundException(id)
 }

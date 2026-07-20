@@ -81,7 +81,7 @@ services:
 
   # Ch.17 ADR-028: OPA-class policy-as-code engine. Production topology is a
   # sidecar per service; locally, one shared instance is queried over HTTP by
-  # all four services — see infra/opa/policies/authz.rego for the actual
+  # all six services — see infra/opa/policies/authz.rego for the actual
   # policy (tenant isolation + role checks).
   opa:
     image: openpolicyagent/opa:0.68.0
@@ -91,6 +91,31 @@ services:
       - "8181:8181"
     volumes:
       - ./infra/opa/policies:/policies:ro
+
+  # Ch.40 §3 ADR-066: cloud-native, HSM-backed KMS for the certificate-
+  # signing key in production. Vault's Transit secrets engine is the local,
+  # self-hostable stand-in — same category as Redpanda-for-Kafka and
+  # Keycloak-for-CIAM, a real system that does the actual job (server-side
+  # signing/verification, the private key is never exported in plaintext,
+  # native key-version rotation) rather than a custom-built substitute. Dev
+  # mode with a fixed root token is a local-only simplification — never a
+  # real deployment pattern, called out in README same as Keycloak's
+  # dev-mode equivalent.
+  vault:
+    image: hashicorp/vault:1.17
+    container_name: elemes-vault
+    cap_add:
+      - IPC_LOCK
+    environment:
+      VAULT_DEV_ROOT_TOKEN_ID: elemes-root-token
+      VAULT_DEV_LISTEN_ADDRESS: 0.0.0.0:8200
+    ports:
+      - "8200:8200"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:8200/v1/sys/health?standbyok=true"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
 
 volumes:
   postgres_data:

@@ -31,6 +31,8 @@ Spring Boot services:
   (Ch.26 ADR-043) that pins the exact content version the learner enrolled
   against — not whatever's current when the certificate is issued — exposes
   independent verification, and supports append-only revocation (Ch.41 §3).
+  Signing itself is KMS-backed (Ch.40 §3 ADR-066): the private key lives in
+  Vault's Transit engine, never in this process.
 - **org-hierarchy** (`:8085`) — plain CRUD org-unit service (Ch.10 §3:
   Standard tier, no event sourcing) implementing Ch.19's PostgreSQL
   closure-table hierarchy model: each `org_units` row can sit at any position
@@ -324,6 +326,35 @@ Spring Boot services:
     `platform-admin` specifically, since that role is inherently
     cross-tenant by design, not scoped to any single one. `learner1` (no
     admin role at all) still got 403 outright, and no token still got 401.
+18. **The certificate-signing key is genuinely KMS-backed now — a real
+    private key that never enters this process, real tamper detection
+    against it, and real key rotation that doesn't break old
+    certificates.** `.local-kms/`'s plaintext file is gone; the private key
+    lives in Vault's Transit secrets engine (`certificate-signing`, RSA-2048),
+    auto-provisioned idempotently on startup (confirmed by restarting
+    Certification and checking no error, no duplicate-key conflict, both
+    previously-issued certificates still verified identically afterward).
+    Every signature is genuinely Vault's own format (`vault:v1:...`), not a
+    locally-computed one. Tamper-detection was re-proven against the *real*
+    tampering surface, catching an easy mistake along the way: the first
+    attempt updated `certificate_projection.score` directly and saw
+    `/verify` stay `true` — not because Vault was wrong, but because
+    `verify()` rehydrates the certificate from the event-sourced
+    `certificate_events` table, not the projection, so the projection was
+    never what was being checked in the first place. Corrected by tampering
+    `certificate_events.payload`'s JSONB `score` field directly instead —
+    `/verify` correctly flipped to `false`, and flipped back to `true` after
+    restoring it, with Vault doing the actual cryptographic comparison both
+    times, not a hardcoded response. Key rotation (Ch.40 §3, admin-only,
+    `learner1` got 403 attempting it) was proven end to end against real
+    Vault state, not just a mocked response: rotating moved Vault's active
+    version from 1 to 2; the certificate issued *before* rotation stayed
+    verifiable afterward (Vault keeps historical key versions specifically
+    for this); a certificate issued *after* rotation carried a genuine
+    `vault:v2:...` signature; and `/public-key` correctly started returning
+    *both* versions' PEM-encoded public keys, keyed by version, so a third
+    party verifying independently (Ch.26 §6) can find the exact historical
+    key a given signature needs, not just whatever's currently active.
 
 ## Tech stack (per the AKB's ADRs)
 
@@ -335,7 +366,7 @@ Spring Boot services:
 | Org hierarchy model | Closure table, PostgreSQL-native (Ch.19 ADR-031) | Implemented directly — no local stand-in needed, the AKB's selected technology *is* what's running locally |
 | Tenancy control plane | Ch.18 ADR-029: separate control/data plane, single provisioning model | Implemented directly as `tenant-provisioning` — data plane routing is trivial locally (one pooled Postgres cluster), so this is mostly the registry/lifecycle half of ADR-029, not the multi-region routing half |
 | Event bus/store | Managed Kafka (Ch.15 ADR-024) | **Redpanda** — fully wired: assessment → enrollment → certification, and org-hierarchy → certification (cache invalidation), all published via a transactional outbox in each producer |
-| Key management | Cloud HSM/KMS (Ch.40 ADR-066) | **Local RSA keypair**, file-persisted under `.local-kms/` (gitignored) — see deferred items |
+| Key management | Cloud HSM/KMS (Ch.40 ADR-066) | **HashiCorp Vault** (Transit secrets engine) — dev mode with a fixed root token locally, same simplification category as Keycloak's dev mode; the private key genuinely never leaves Vault, same as a real KMS |
 | Object storage | S3-compatible (Ch.28 ADR-045) | MinIO in docker-compose — provisioned, still unused |
 | Identity/Auth | Bought CIAM platform (Ch.16 ADR-026) | **Keycloak** — real OIDC, `tenant_id` custom claim, wired into all four services as OAuth2 Resource Servers |
 | Authorization | Policy-as-code, OPA-class (Ch.17 ADR-028) | **Open Policy Agent** — one shared container locally (per-service sidecar in production), queried over HTTP by all four services; Rego policy in `infra/opa/policies/authz.rego` |
@@ -378,11 +409,18 @@ Spring Boot services:
   affected by that specific change) — correct, since a false cache-clear
   just costs one extra live lookup, but not the fine-grained invalidation
   ADR-032 could in principle support.
-- **Certificate-signing key is a local file, not an HSM/KMS.** `.local-kms/`
-  holds a plaintext RSA private key. It is persisted across restarts purely
-  so local demo certificates keep verifying — this has zero of the protection
-  Ch.40 §3 requires (HSM-backed, rotated, access-audited). Never let this
-  file or its certificates be mistaken for anything but a local dev artifact.
+- **The signing key is Vault-backed and rotatable now, but Vault itself
+  runs in dev mode with a fixed root token — not HSM-backed, not
+  access-audited beyond Vault's own (unexamined) audit log, and every
+  service that talks to Vault uses the exact same all-powerful root
+  token.** A real deployment needs per-service Vault tokens/AppRole
+  auth scoped to exactly the `sign`/`verify`/`rotate` operations on this
+  one key (Ch.40 §3's "access strictly limited to the Certification
+  context's signing operation"), TLS to Vault, and Vault's own storage
+  backend to be genuinely HSM-backed (dev mode keeps everything in
+  memory, unsealed, by design) — none of that is true locally. Never let
+  the local Vault container or certificates it signs be mistaken for
+  anything but a local dev artifact.
 - **Kafka consumption idempotency relies on guards, not dedup tracking.**
   Enrollment's `AssessmentEventListener` treats a duplicate delivery as a
   harmless no-op via `IllegalStateException` catch. Certification's guard is
@@ -494,7 +532,7 @@ Gradle toolchain regardless of your system `JAVA_HOME`).
 #    docker exec elemes-postgres psql -U elemes -d elemes -c \
 #      "create role elemes_app with login password 'elemes_app_local_dev'; \
 #       grant create, connect on database elemes to elemes_app;"
-docker compose up -d postgres redpanda keycloak opa
+docker compose up -d postgres redpanda keycloak opa vault
 
 # 2. Run all six services (each in its own terminal, or backgrounded)
 JAVA_HOME="/path/to/jdk-21" ./gradlew :modules:course-management:bootRun
@@ -617,13 +655,13 @@ modules/
   course-management/      plain CRUD Course service + Ch.12 §7 hash-addressed, insert-only content versioning + OrgScopeCache (Ch.19 ADR-032, 5-min TTL, fail-closed) + Kafka consumer for cache invalidation
   assignment-enrollment/  event-sourced Enrollment aggregate + REST API + outbox-backed Kafka producer/consumer
   assessment/              event-sourced Assessment aggregate + REST API + outbox-backed Kafka producer
-  certification/           event-sourced Certificate aggregate (pins content version + signs it) + REST API + 2 Kafka consumers (EnrollmentEventMessage, OrgUnitEventMessage) + local signing + OrgScopeCache (Ch.19 ADR-032, 5-min TTL, fail-closed)
+  certification/           event-sourced Certificate aggregate (pins content version + signs it) + REST API + 2 Kafka consumers (EnrollmentEventMessage, OrgUnitEventMessage) + VaultSigningService (Ch.40 §3 KMS) + OrgScopeCache (Ch.19 ADR-032, 5-min TTL, fail-closed)
   org-hierarchy/           plain CRUD OrgUnit service + Ch.19 §2 PostgreSQL closure-table hierarchy model (multiple concurrent hierarchy types, re-parenting) + outbox-backed Kafka producer
   tenant-provisioning/     plain CRUD tenant registry (Ch.18 control plane) + OpaDataPusher (pushes lifecycle status into OPA's data API)
 infra/keycloak/           realm-export.json — auto-imported realm, client, tenant_id claim mapper, seeded users
 infra/opa/policies/       authz.rego — tenant isolation + role-based restricted-action rules (Ch.17 ADR-028)
 infra/postgres/           init-app-role.sql — creates the non-superuser elemes_app role RLS depends on (Ch.12 §2)
-docker-compose.yml        Postgres, Redpanda, Keycloak, OPA (all used); MinIO (provisioned, unused)
+docker-compose.yml        Postgres, Redpanda, Keycloak, OPA, Vault (all used); MinIO (provisioned, unused)
 docs/akb/                 the 50-chapter Architecture Knowledge Base
 ```
 
@@ -658,10 +696,15 @@ doesn't publish.
 
 ## Next increments, in order
 
-1. Real KMS integration (Ch.40 §3), replacing `.local-kms/` — required
-   before any certificate here means anything legally. This is the top item
-   now — the platform-ops identity gap named in the previous increment is
-   closed (`platform-admin` role, see "What's proven" #17).
+1. **Scoped, per-service Vault authentication**, replacing the one
+   all-powerful root token every service currently shares — the sharpest
+   gap left from this increment (Ch.40 §3's "access strictly limited to the
+   Certification context's signing operation" isn't true yet: any service
+   holding that token could read/rotate/delete the key, or any other secret
+   in this Vault instance). AppRole auth scoped to exactly `sign`/`verify`/
+   `rotate` on the `certificate-signing` key is the natural next step. This
+   is the top item now — KMS integration itself is done and proven (`.local
+   -kms/` is gone, see "What's proven" #18).
 2. Explicit outbox dedup/processed-message tracking on the consumer side,
    tightening the "guards happen to make this safe" idempotency story noted
    above into something more deliberate.

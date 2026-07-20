@@ -43,3 +43,10 @@ org-hierarchy:
 
 opa:
   base-url: http://localhost:8181
+
+# Ch.40 §3 ADR-066: local Vault dev-mode root token — never a real
+# deployment credential, same category as Keycloak's dev-mode admin
+# password. See docker-compose.yml's vault service.
+vault:
+  base-url: http://localhost:8200
+  token: elemes-root-token
