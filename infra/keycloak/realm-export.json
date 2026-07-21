@@ -9,9 +9,13 @@
       "enabled": true,
       "publicClient": true,
       "directAccessGrantsEnabled": true,
-      "standardFlowEnabled": false,
+      "standardFlowEnabled": true,
       "protocol": "openid-connect",
-      "redirectUris": ["*"],
+      "redirectUris": ["http://localhost:5173/*"],
+      "webOrigins": ["http://localhost:5173"],
+      "attributes": {
+        "pkce.code.challenge.method": "S256"
+      },
       "protocolMappers": [
         {
           "name": "tenant-id-mapper",

@@ -22,6 +22,7 @@ class SecurityConfig {
     fun filterChain(http: HttpSecurity): SecurityFilterChain {
         http
             .csrf { it.disable() }
+            .cors { }
             .authorizeHttpRequests {
                 it.requestMatchers("/actuator/**").permitAll()
                     .requestMatchers("/api/v1/certificates/public-key").permitAll()

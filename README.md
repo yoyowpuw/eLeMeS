@@ -24,6 +24,7 @@ run it.
 
 | Service | Port | What it does |
 |---|---|---|
+| **frontend** | `:5173` | React web app — course browsing/authoring, enrollment, assessments, and certificate issuance/verification, signed in via Keycloak. |
 | **course-management** | `:8083` | Course authoring and content versioning (each publish creates a new, immutable content version rather than editing in place). Also owns **Learning Paths** — ordered, multi-step sequences of courses, versioned the same way. |
 | **assignment-enrollment** | `:8081` | Enrollment lifecycle (`Assigned → InProgress → AwaitingGrading → Completed`), pinning the exact content version a learner enrolled against. Drives learners through multi-step Learning Paths automatically as each step completes. |
 | **assessment** | `:8082` | Multiple-choice assessments with auto-grading. |
@@ -72,10 +73,12 @@ run it.
 | Object storage | S3-compatible | MinIO (provisioned, not yet used) |
 | Identity/Auth | CIAM platform | Keycloak (OIDC, custom `tenant_id` claim) |
 | Authorization | Policy-as-code | Open Policy Agent (Rego policy) |
+| Frontend | React | Vite + TypeScript, React Router, React Query, real OIDC Authorization Code + PKCE login against Keycloak |
 
 ## Project layout
 
 ```
+frontend/                  React SPA — see its own section below
 modules/
   common/                 shared kernel: event store, transactional outbox, tenant context/routing,
                            OPA client, Published Language DTOs
@@ -116,16 +119,20 @@ JAVA_HOME="/path/to/jdk-21" ./gradlew :modules:assignment-enrollment:bootRun
 JAVA_HOME="/path/to/jdk-21" ./gradlew :modules:certification:bootRun
 JAVA_HOME="/path/to/jdk-21" ./gradlew :modules:org-hierarchy:bootRun
 JAVA_HOME="/path/to/jdk-21" ./gradlew :modules:tenant-provisioning:bootRun
+
+# 4. Run the frontend
+cd frontend && npm install && npm run dev
+# -> http://localhost:5173 — sign in with any seeded user (see below)
 ```
 
 ```bash
-# 4. Get a token (see infra/keycloak/realm-export.json for seeded users)
+# 5. Or drive the API directly: get a token (see infra/keycloak/realm-export.json for seeded users)
 TOKEN=$(curl -s -X POST http://localhost:8080/realms/elemes/protocol/openid-connect/token \
   -d "grant_type=password" -d "client_id=elemes-service" \
   -d "username=learner1" -d "password=learner1" \
   | grep -o '"access_token":"[^"]*"' | cut -d'"' -f4)
 
-# 5. Course -> Enrollment -> Assessment -> Certificate, end to end
+# Course -> Enrollment -> Assessment -> Certificate, end to end
 COURSE_ID=$(curl -s -X POST localhost:8083/api/v1/courses \
   -H "Content-Type: application/json" -H "Authorization: Bearer $TOKEN" \
   -d '{"code":"SEC-101","title":"Security Awareness","initialContentHash":"sha256-placeholder-v1"}' \

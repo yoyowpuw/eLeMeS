@@ -18,6 +18,7 @@ class SecurityConfig {
     fun filterChain(http: HttpSecurity): SecurityFilterChain {
         http
             .csrf { it.disable() }
+            .cors { }
             .authorizeHttpRequests {
                 it.requestMatchers("/actuator/**").permitAll()
                     .anyRequest().authenticated()
