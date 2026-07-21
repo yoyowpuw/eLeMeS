@@ -31,7 +31,13 @@ export function Layout() {
                 {auth.user?.profile.preferred_username} · {tenantId} · {roles.join(", ") || "no roles"}
                 {canAuthorContent ? "" : " (learner view)"}
               </span>
-              <button onClick={() => auth.removeUser()}>Sign out</button>
+              {/* `removeUser()` only clears this app's own local session — it
+                  never touches Keycloak's SSO session cookie, so the *next*
+                  sign-in would silently succeed with no login prompt at all.
+                  `signoutRedirect()` does RP-Initiated Logout: it redirects
+                  to Keycloak's own end_session_endpoint, which actually
+                  terminates the SSO session, before coming back here. */}
+              <button onClick={() => auth.signoutRedirect()}>Sign out</button>
             </>
           ) : (
             <button onClick={() => auth.signinRedirect()}>Sign in</button>
