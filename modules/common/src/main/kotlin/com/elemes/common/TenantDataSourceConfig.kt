@@ -1,5 +1,6 @@
 package com.elemes.common
 
+import org.springframework.beans.factory.annotation.Value
 import org.springframework.beans.factory.config.BeanPostProcessor
 import org.springframework.context.annotation.Bean
 import org.springframework.context.annotation.Configuration
@@ -7,10 +8,11 @@ import javax.sql.DataSource
 
 /**
  * Wraps Spring Boot's autoconfigured `dataSource` bean in
- * [TenantAwareDataSource] — still a single underlying HikariCP pool, this
- * only decorates `getConnection()` — so every connection anything in the
- * application uses (`JdbcTemplate`, Flyway migrations, everything) goes
- * through it.
+ * [TenantAwareDataSource] — still a single underlying HikariCP pool for the
+ * pooled tier (plus, for a SILO tenant, a lazily-built second pool — see
+ * that class), this only decorates `getConnection()` — so every connection
+ * anything in the application uses (`JdbcTemplate`, Flyway migrations,
+ * everything) goes through it.
  *
  * A `BeanPostProcessor`, not an `@Primary @Bean` wrapping a `@Qualifier`ed
  * dependency, because `@Import` on a `@SpringBootApplication` class
@@ -32,12 +34,22 @@ import javax.sql.DataSource
 class TenantDataSourceConfig {
 
     @Bean
-    fun tenantAwareDataSourcePostProcessor(): BeanPostProcessor = object : BeanPostProcessor {
-        override fun postProcessAfterInitialization(bean: Any, beanName: String): Any {
-            if (beanName == "dataSource" && bean is DataSource) {
-                return TenantAwareDataSource(bean)
+    fun siloRoutingClient(@Value("\${opa.base-url}") opaBaseUrl: String): SiloRoutingClient = SiloRoutingClient(opaBaseUrl)
+
+    @Bean
+    fun tenantAwareDataSourcePostProcessor(
+        siloRoutingClient: SiloRoutingClient,
+        @Value("\${spring.datasource.url}") poolJdbcUrl: String,
+    ): BeanPostProcessor {
+        val ownSchema = Regex("currentSchema=([^&]+)").find(poolJdbcUrl)?.groupValues?.get(1)
+            ?: error("spring.datasource.url is missing ?currentSchema=... — cannot determine which schema silo connections should use")
+        return object : BeanPostProcessor {
+            override fun postProcessAfterInitialization(bean: Any, beanName: String): Any {
+                if (beanName == "dataSource" && bean is DataSource) {
+                    return TenantAwareDataSource(bean, siloRoutingClient, ownSchema)
+                }
+                return bean
             }
-            return bean
         }
     }
 }

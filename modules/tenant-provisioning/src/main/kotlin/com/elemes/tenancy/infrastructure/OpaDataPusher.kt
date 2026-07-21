@@ -41,11 +41,24 @@ class OpaDataPusher(@Value("\${opa.base-url}") opaBaseUrl: String) {
     private val restClient = RestClient.create(opaBaseUrl)
     private val log = LoggerFactory.getLogger(javaClass)
 
+    /**
+     * `isolationTier`/`siloDatabaseUrl` ride along with `status` on the same
+     * push — Ch.12 §2 silo tier: every data-plane service's
+     * `SiloRoutingClient` reads this same pushed document to decide which
+     * physical database a tenant's connections belong on, reusing this
+     * mechanism rather than a second registry query path.
+     */
     fun push(tenant: Tenant) {
         try {
             restClient.put()
                 .uri("/v1/data/tenants/{tenantId}", tenant.tenantId)
-                .body(mapOf("status" to tenant.status.name))
+                .body(
+                    mapOf(
+                        "status" to tenant.status.name,
+                        "isolationTier" to tenant.isolationTier.name,
+                        "siloDatabaseUrl" to tenant.siloDatabase,
+                    )
+                )
                 .retrieve()
                 .toBodilessEntity()
         } catch (ex: Exception) {

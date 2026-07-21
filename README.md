@@ -450,6 +450,68 @@ Spring Boot services:
     still returned `valid:true` — the payload format only grows for a
     path-aware certificate, never changes shape for the direct-course case,
     so no previously-issued signature was invalidated by this change.
+22. **The silo tier (Ch.12 §2/Ch.18 §3) is now a real, dedicated database
+    per tenant — not just a stored `isolationTier` enum value — and every
+    one of the five data-plane services transparently routes a SILO
+    tenant's connections there instead of the shared pooled cluster,
+    with zero application code (controllers, repositories, services)
+    aware the distinction exists.** A second Postgres instance
+    (`postgres-silo`, docker-compose) stands in for "dedicated cluster
+    infrastructure" per tenant. Creating a tenant with `isolationTier:
+    SILO` now synchronously (matching Ch.18 §4's own sequence diagram
+    ordering — provision before activate) creates a real dedicated
+    database via `SiloProvisioner` (using the silo cluster's own
+    superuser credentials for exactly the one privileged `CREATE DATABASE`
+    statement, the same bootstrap-vs-runtime separation Vault's AppRole
+    setup already established — see #19), then calls every data-plane
+    service's own `POST /internal/silo/provision`, which runs *that
+    service's own bundled Flyway migrations* against it — the same
+    schema-ownership boundary the pooled cluster already has, just applied
+    per-tenant instead of once. `TenantAwareDataSource` (already the one
+    place `app.tenant_id` gets set for RLS) now also decides, per
+    connection checkout, which *physical* database a request's tenant maps
+    to — reading the same `data.tenants.<id>` document already pushed to
+    OPA on every tenant transition (#16), extended to carry
+    `isolationTier`/`siloDatabaseUrl` — and lazily builds/caches a second
+    HikariCP pool per silo tenant the first time it's needed.
+
+    Two real architectural gaps surfaced during testing, not designed for
+    up front, both fixed and re-verified:
+    - **`OutboxPoller` runs on a `@Scheduled` background thread with no
+      per-request `TenantContext`.** Left alone, it would only ever poll
+      the pooled cluster's `outbox` table — a SILO tenant's own outbox
+      rows, sitting in a database that thread never even connects to,
+      would simply never publish to Kafka. Fixed by having the poller
+      explicitly poll once for pooled (no tenant set) and once more per
+      known silo tenant (`SiloRoutingClient.knownSiloTenantIds()`, a
+      short-TTL list pulled from the same OPA document), setting
+      `TenantContext` around each. Caught by a certificate that never
+      arrived for a real SILO-tenant enrollment; confirmed fixed by the
+      same certificate appearing immediately after the fix, and by reading
+      the outbox row's timestamps directly.
+    - **`/verify`'s `TenantContext.setBypass()` also only ever reaches the
+      pooled cluster** — the public verify endpoint deliberately has no
+      tenant to route by at all, and bypass has no *real* tenant id for
+      the routing logic to map to a specific silo database. Fixed by
+      falling back to checking every known silo tenant's own database
+      directly (a linear scan, an explicitly documented limitation, not a
+      silently-accepted one) when the pooled lookup comes back empty.
+
+    Proved end-to-end against real running services, using a genuinely
+    new Keycloak user (`silo-admin`, `tenant_id: globex-silo`) authenticated
+    exactly like any other: created a SILO tenant, watched a real dedicated
+    database appear on `postgres-silo` with all five services' schemas and
+    tables independently migrated onto it, ran the full course → enrollment
+    → certificate golden path against it, and — the actual proof of
+    isolation, not just of routing — queried the **pooled** database
+    directly afterward and found **zero** rows for that tenant in
+    `course_mgmt.courses`, `enrollment.enrollment_projection`, or
+    `certification.certificate_projection`, while the exact expected rows
+    existed in the silo database. Re-ran the tamper-detection round trip
+    (mutate the event row directly, watch `/verify` flip false, restore,
+    watch it flip back true) against the silo-stored certificate
+    specifically, and confirmed an ordinary pooled-tenant course creation
+    still worked unaffected throughout.
 
 ## Tech stack (per the AKB's ADRs)
 
@@ -457,7 +519,7 @@ Spring Boot services:
 |---|---|---|
 | Language/runtime | Kotlin/JVM, JDK 21 LTS (Ch.15 ADR-023) | — |
 | Framework | Spring Boot 3.3 | — (not pinned by the AKB; chosen for this scaffold) |
-| Database | PostgreSQL (Ch.12 ADR-016) | Docker, `postgres:16-alpine`, **one schema per service** (`enrollment`, `assessment`, `course_mgmt`, `certification`, `org_hierarchy`) — genuine per-context data ownership on one shared local instance |
+| Database | PostgreSQL (Ch.12 ADR-016) | Docker, `postgres:16-alpine`, **one schema per service** (`enrollment`, `assessment`, `course_mgmt`, `certification`, `org_hierarchy`) on a shared pooled instance, **plus** a second `postgres-silo` instance hosting one dedicated database per SILO tenant (Ch.12 §2) — genuine hybrid isolation, not pooled-only |
 | Org hierarchy model | Closure table, PostgreSQL-native (Ch.19 ADR-031) | Implemented directly — no local stand-in needed, the AKB's selected technology *is* what's running locally |
 | Tenancy control plane | Ch.18 ADR-029: separate control/data plane, single provisioning model | Implemented directly as `tenant-provisioning` — data plane routing is trivial locally (one pooled Postgres cluster), so this is mostly the registry/lifecycle half of ADR-029, not the multi-region routing half |
 | Event bus/store | Managed Kafka (Ch.15 ADR-024) | **Redpanda** — fully wired: assessment → enrollment → certification, and org-hierarchy → certification (cache invalidation), all published via a transactional outbox in each producer |
@@ -537,23 +599,27 @@ Spring Boot services:
   to completion, which is ADR-034's *default* behavior, correctly
   implemented — only the explicit-override path is missing.
 - **No idempotency-key handling** (Ch.13 §4) on mutation endpoints yet.
-- **Data-plane isolation (RLS), the control plane's core lifecycle, and its
-  platform-vs-tenant identity separation are all real now; the silo tier
-  and the provisioning workflow's config steps aren't.** Pooled tenants get
-  database-enforced row isolation (What's proven #15); the control plane
-  (Ch.18 — tenant registry, `PROVISIONING → ACTIVE → OFFBOARDED` lifecycle)
-  genuinely revokes access platform-wide the instant a tenant is offboarded
-  (#16); and a tenant's own `admin` genuinely cannot manage the tenant
-  registry at all anymore — only a dedicated `platform-admin` Keycloak role
-  can (#17). What's still not built: the **silo tier** (a dedicated cluster
-  for tenants over the size/regulatory threshold) is metadata-only,
-  `isolationTier: SILO` on a tenant record doesn't actually provision
-  separate infrastructure anywhere; there's no SSO/SCIM/HRIS configuration
-  step in the provisioning lifecycle (Ch.18 §4 names it, `activate()` just
-  flips a status); and there's genuinely only two tenants' worth of real
-  business data in this environment regardless (`acme-corp`/`globex-corp`,
-  both in the same pooled cluster) — `platform-ops` isn't a business
-  tenant, it's the platform identity that manages the registry itself.
+- **Data-plane isolation (RLS), the control plane's core lifecycle, its
+  platform-vs-tenant identity separation, and the silo tier are all real
+  now; only the provisioning workflow's SSO/SCIM/HRIS config steps
+  aren't.** Pooled tenants get database-enforced row isolation (What's
+  proven #15); the control plane (Ch.18 — tenant registry, `PROVISIONING →
+  ACTIVE → OFFBOARDED` lifecycle) genuinely revokes access platform-wide
+  the instant a tenant is offboarded (#16); a tenant's own `admin`
+  genuinely cannot manage the tenant registry at all anymore — only a
+  dedicated `platform-admin` Keycloak role can (#17); and a SILO tenant now
+  genuinely gets a dedicated database, not just a stored enum value (#22).
+  What's still not built: there's no SSO/SCIM/HRIS configuration step in
+  the provisioning lifecycle (Ch.18 §4 names it, `activate()` just flips a
+  status); pool-to-silo migration for a tenant that organically crosses the
+  threshold (explicitly flagged as a follow-up in Ch.18's own chapter
+  review, assigned to Ch.12) doesn't exist — a tenant's tier is fixed at
+  creation, forever; `/verify`'s cross-database certificate lookup (#22) is
+  a linear scan over every known silo tenant, fine at today's tenant count
+  but not how this would stay cheap with hundreds of silo tenants; and
+  SiloProvisioner has no retry/saga handling — if a data-plane service is
+  unreachable mid-provision, tenant creation fails outright rather than
+  leaving a resumable partial state.
 - **Testcontainers integration test is broken on this machine** — see below.
 
 **Operational gotcha worth knowing about:** if you experiment with schema
@@ -636,7 +702,12 @@ Gradle toolchain regardless of your system `JAVA_HOME`).
 #    docker exec elemes-postgres psql -U elemes -d elemes -c \
 #      "create role elemes_app with login password 'elemes_app_local_dev'; \
 #       grant create, connect on database elemes to elemes_app;"
-docker compose up -d postgres redpanda keycloak opa vault
+docker compose up -d postgres postgres-silo redpanda keycloak opa vault
+#    postgres-silo (Ch.12 §2) auto-creates its own elemes_app role the same
+#    way (infra/postgres/init-app-role-silo.sql) — it starts with no tenant
+#    databases at all; SiloProvisioner creates one per SILO tenant on demand,
+#    nothing to do here up front. Only needed at all if you intend to
+#    exercise the silo tier — every other feature works with it stopped.
 
 # 1b. Vault has no auto-init hook like Postgres/Keycloak — this ALWAYS
 #     needs to run once against a fresh Vault container (dev mode keeps
@@ -811,6 +882,21 @@ doesn't publish.
 
 ## Next increments, in order
 
-1. The silo tier (Ch.12 §2/Ch.18 §3) as more than tenant metadata — actually
-   provisioning a dedicated cluster for a tenant crossing the threshold is
-   still entirely unmodeled.
+There is no more small/incremental backlog item queued here — the silo
+tier (the last item on this list) is done as of "What's proven" #22. The
+next "next" needs a fresh prioritization decision rather than just the
+next line in a list; candidates surfaced along the way, roughly in the
+order they'd likely matter:
+
+1. Frontend (Ch.14, React) — deferred twice already by explicit user
+   choice in favor of finishing backend increments first; still entirely
+   unstarted.
+2. Pool-to-silo tenant migration (Ch.18 §6 CTO note, assigned to Ch.12) —
+   a tenant that organically grows past the silo threshold currently has
+   no path to move without manual intervention; today's `SiloProvisioner`
+   only handles a tenant created *already* SILO.
+3. SSO/SCIM/HRIS configuration steps in the provisioning lifecycle
+   (Ch.18 §4 names them, `activate()` currently just flips a status).
+4. Notification (Ch.34) — a Generic-subdomain context with no
+   implementation yet at all, unlike Learning Path/Question Bank which
+   were at least inlined into an existing service.

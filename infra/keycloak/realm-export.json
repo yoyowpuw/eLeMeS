@@ -98,6 +98,18 @@
       "credentials": [{ "type": "password", "value": "platform-ops", "temporary": false }],
       "attributes": { "tenant_id": ["platform"] },
       "realmRoles": ["platform-admin"]
+    },
+    {
+      "username": "silo-admin",
+      "enabled": true,
+      "emailVerified": true,
+      "email": "silo-admin@globex-silo.example",
+      "firstName": "Silo",
+      "lastName": "Admin",
+      "requiredActions": [],
+      "credentials": [{ "type": "password", "value": "silo-admin", "temporary": false }],
+      "attributes": { "tenant_id": ["globex-silo"] },
+      "realmRoles": ["admin"]
     }
   ]
 }

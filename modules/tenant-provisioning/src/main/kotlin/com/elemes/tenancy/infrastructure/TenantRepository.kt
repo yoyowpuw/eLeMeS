@@ -28,20 +28,26 @@ class TenantRepository(private val jdbcTemplate: JdbcTemplate) {
 
     fun findById(tenantId: String): Tenant? =
         jdbcTemplate.query(
-            "select tenant_id, name, isolation_tier, region, status, created_at, updated_at from tenants where tenant_id = ?",
+            "select tenant_id, name, isolation_tier, region, status, created_at, updated_at, silo_database from tenants where tenant_id = ?",
             { rs, _ -> mapTenant(rs) },
             tenantId,
         ).firstOrNull()
 
     fun findAll(): List<Tenant> =
         jdbcTemplate.query(
-            "select tenant_id, name, isolation_tier, region, status, created_at, updated_at from tenants order by created_at",
+            "select tenant_id, name, isolation_tier, region, status, created_at, updated_at, silo_database from tenants order by created_at",
             { rs, _ -> mapTenant(rs) },
         )
 
     fun updateStatus(tenantId: String, status: TenantStatus): Tenant? {
         val now = Instant.now()
         jdbcTemplate.update("update tenants set status = ?, updated_at = ? where tenant_id = ?", status.name, Timestamp.from(now), tenantId)
+        return findById(tenantId)
+    }
+
+    fun updateSiloDatabase(tenantId: String, siloDatabase: String): Tenant? {
+        val now = Instant.now()
+        jdbcTemplate.update("update tenants set silo_database = ?, updated_at = ? where tenant_id = ?", siloDatabase, Timestamp.from(now), tenantId)
         return findById(tenantId)
     }
 
@@ -53,5 +59,6 @@ class TenantRepository(private val jdbcTemplate: JdbcTemplate) {
         status = TenantStatus.valueOf(rs.getString("status")),
         createdAt = rs.getTimestamp("created_at").toInstant(),
         updatedAt = rs.getTimestamp("updated_at").toInstant(),
+        siloDatabase = rs.getString("silo_database"),
     )
 }

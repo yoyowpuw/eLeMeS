@@ -9,6 +9,7 @@ import com.elemes.tenancy.IsolationTier
 import com.elemes.tenancy.Tenant
 import com.elemes.tenancy.TenantStatus
 import com.elemes.tenancy.infrastructure.OpaDataPusher
+import com.elemes.tenancy.infrastructure.SiloProvisioner
 import com.elemes.tenancy.infrastructure.TenantRepository
 import org.springframework.http.HttpStatus
 import org.springframework.http.ResponseEntity
@@ -45,12 +46,25 @@ class TenantController(
     private val repository: TenantRepository,
     private val authorizer: OpaAuthorizer,
     private val opaDataPusher: OpaDataPusher,
+    private val siloProvisioner: SiloProvisioner,
 ) {
 
+    /**
+     * Ch.18 §4's sequence diagram: "Create tenant" -> "Provision cluster" ->
+     * (later) "Activate tenant" — for `isolationTier = SILO`, the dedicated
+     * database and every data-plane service's schema on it are provisioned
+     * synchronously, right here, before this returns, matching that
+     * ordering. A POOLED tenant needs no extra step — the shared pooled
+     * cluster's schemas already exist on every service.
+     */
     @PostMapping
     fun create(@AuthenticationPrincipal jwt: Jwt, @RequestBody request: CreateTenantRequest): ResponseEntity<TenantResponse> {
         authorizer.check(AuthzInput("tenant_create", jwt.tenantId().value, jwt.roles()))
-        val tenant = repository.create(request.tenantId, request.name, request.isolationTier, request.region)
+        var tenant = repository.create(request.tenantId, request.name, request.isolationTier, request.region)
+        if (tenant.isolationTier == IsolationTier.SILO) {
+            val siloDatabaseUrl = siloProvisioner.provision(tenant.tenantId, jwt.tokenValue)
+            tenant = repository.updateSiloDatabase(tenant.tenantId, siloDatabaseUrl) ?: tenant
+        }
         opaDataPusher.push(tenant)
         return ResponseEntity.status(HttpStatus.CREATED).body(tenant.toResponse())
     }

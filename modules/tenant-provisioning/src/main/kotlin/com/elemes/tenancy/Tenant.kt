@@ -13,7 +13,7 @@ import java.time.Instant
  */
 enum class TenantStatus { PROVISIONING, ACTIVE, OFFBOARDED }
 
-/** Ch.12 §2/Ch.18 §3: pooled is the default; silo is metadata only here — no separate cluster actually gets provisioned locally, see README. */
+/** Ch.12 §2/Ch.18 §3: pooled is the default; a SILO tenant gets a genuinely dedicated database — see SiloProvisioner. */
 enum class IsolationTier { POOLED, SILO }
 
 data class Tenant(
@@ -24,4 +24,6 @@ data class Tenant(
     val status: TenantStatus,
     val createdAt: Instant,
     val updatedAt: Instant,
+    /** Base JDBC URL (no schema) of this tenant's dedicated database, set by SiloProvisioner — always null for a POOLED tenant. */
+    val siloDatabase: String? = null,
 )

@@ -22,6 +22,33 @@ services:
       timeout: 5s
       retries: 10
 
+  # Ch.12 §2 silo tier: a *separate* Postgres instance standing in for
+  # "dedicated cluster infrastructure" for large/regulated tenants — the
+  # local-dev simplification is one container hosting N per-tenant
+  # databases rather than N real dedicated clusters, same category of
+  # simplification as Redpanda-for-Kafka or Keycloak/Vault dev mode.
+  # Databases inside it are created dynamically per silo tenant (see
+  # tenant-provisioning's SiloProvisioner), not upfront — this container
+  # starts with no tenant databases at all, only the maintenance `postgres`
+  # database and the `elemes_app` role.
+  postgres-silo:
+    image: postgres:16-alpine
+    container_name: elemes-postgres-silo
+    environment:
+      POSTGRES_DB: postgres
+      POSTGRES_USER: elemes
+      POSTGRES_PASSWORD: elemes_local_dev
+    ports:
+      - "5433:5432"
+    volumes:
+      - postgres_silo_data:/var/lib/postgresql/data
+      - ./infra/postgres/init-app-role-silo.sql:/docker-entrypoint-initdb.d/01-init-app-role.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U elemes"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
   # Kafka-API-compatible, single-binary, no ZooKeeper — local stand-in for the
   # managed Kafka selected in Ch.15 ADR-024. Fully wired: assessment and
   # enrollment both publish via a transactional outbox; enrollment and
@@ -127,4 +154,5 @@ services:
 
 volumes:
   postgres_data:
+  postgres_silo_data:
   minio_data:

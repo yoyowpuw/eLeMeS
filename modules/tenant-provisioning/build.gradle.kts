@@ -1,8 +1,10 @@
 // Ch.18 Multi-tenancy — Tenancy & Provisioning bounded context (Ch.11 #3):
 // the control plane. Owns the tenant registry and provisioning/offboarding
-// lifecycle; the actual silo/pooled database clusters (data plane) are
-// Ch.12's concern, provisioned per-tenant elsewhere — this service only
-// tracks which tier a tenant is on, it doesn't stand up infrastructure.
+// lifecycle. For a SILO tenant (Ch.12 §2), SiloProvisioner also creates the
+// dedicated per-tenant database on the silo Postgres instance (a genuinely
+// privileged, one-time bootstrap action — see its own doc comment) and
+// triggers each data-plane service's own schema migration against it —
+// this service still never runs another service's migrations itself.
 plugins {
     id("org.springframework.boot")
     id("io.spring.dependency-management")

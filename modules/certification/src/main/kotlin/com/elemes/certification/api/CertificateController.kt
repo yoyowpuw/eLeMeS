@@ -9,6 +9,7 @@ import com.elemes.certification.infrastructure.VaultSigningService
 import com.elemes.common.AuthzInput
 import com.elemes.common.ForbiddenException
 import com.elemes.common.OpaAuthorizer
+import com.elemes.common.SiloRoutingClient
 import com.elemes.common.TenantContext
 import com.elemes.common.roles
 import com.elemes.common.tenantId
@@ -54,6 +55,7 @@ class CertificateController(
     private val signingService: VaultSigningService,
     private val authorizer: OpaAuthorizer,
     private val orgScopeCache: OrgScopeCache,
+    private val siloRoutingClient: SiloRoutingClient,
 ) {
 
     @GetMapping("/{id}")
@@ -81,14 +83,44 @@ class CertificateController(
      */
     @GetMapping("/{id}/verify")
     fun verify(@PathVariable id: UUID): ResponseEntity<VerifyResponse> {
-        TenantContext.setBypass()
-        val certificate = loadOrThrow(id)
+        val certificate = findAnywhere(id) ?: throw CertificateNotFoundException(id)
         val payload = CertificatePayload.canonical(
             certificate.certificateId, certificate.tenantId.value, certificate.enrollmentId, certificate.learnerId,
             certificate.courseId, certificate.contentVersionId, certificate.score, certificate.issuedAt,
             certificate.pathId, certificate.pathVersionId, certificate.realizedStepCourseIds,
         )
         return ResponseEntity.ok(VerifyResponse(signingService.verify(payload, certificate.signature)))
+    }
+
+    /**
+     * Ch.12 §2 silo tier: `TenantContext.setBypass()` only reaches the
+     * pooled cluster (see `TenantAwareDataSource`'s routing — bypass has no
+     * real tenant id to route a SILO tenant's connection by, so it can only
+     * ever mean "pooled, RLS wildcard"). A SILO tenant's own certificate
+     * lives in a database that query never even connects to. Since
+     * `/verify` deliberately has no tenant to scope by at all (that's the
+     * whole point of it being public), the only correct fallback is to also
+     * check every known silo tenant's own database directly. Linear in silo
+     * tenant count — acceptable at this scale; a real deployment with many
+     * silo tenants would want a certificateId -> tenant index instead of a
+     * scan, tracked as a known limitation, not silently accepted forever.
+     */
+    private fun findAnywhere(id: UUID): Certificate? {
+        TenantContext.setBypass()
+        try {
+            repository.findById(id)?.let { return it }
+        } finally {
+            TenantContext.clear()
+        }
+        siloRoutingClient.knownSiloTenantIds().forEach { tenantId ->
+            TenantContext.set(tenantId)
+            try {
+                repository.findById(id)?.let { return it }
+            } finally {
+                TenantContext.clear()
+            }
+        }
+        return null
     }
 
     /**

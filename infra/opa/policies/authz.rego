@@ -65,6 +65,11 @@ restricted_actions := {
 	# manager-delegable action, no org-scoping angle (it's not scoped to
 	# any single learner/course/org unit at all).
 	"rotate_signing_key": {"admin"},
+	# Ch.12 §2 silo tier: only reachable via tenant-provisioning's own
+	# SiloProvisioner, itself already gated on tenant_create being
+	# platform-admin-only — this is the receiving service's own
+	# independent re-check of that same requirement, not a second grant.
+	"provision_tenant_silo": {"platform-admin"},
 }
 
 # Ch.19: actions in this set additionally require org_ok when the caller's

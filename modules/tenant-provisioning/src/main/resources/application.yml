@@ -30,3 +30,21 @@ management:
 
 opa:
   base-url: http://localhost:8181
+
+# Ch.12 §2 silo tier: SiloProvisioner's targets. admin-username/password is
+# the silo Postgres instance's own superuser — see SiloProvisioner's doc
+# comment for why this is the one legitimate use of elevated credentials
+# here, never used for anything but CREATE DATABASE. app-username is the
+# ordinary role every service (including this one, on the pooled cluster)
+# already connects as. data-plane-services is every service that owns a
+# schema and therefore needs its own silo migration triggered — NOT
+# tenant-provisioning itself, which stays on the pooled control-plane
+# database always (Ch.18 §2: control plane doesn't change per tenant).
+silo:
+  postgres:
+    host: localhost
+    port: 5433
+    admin-username: elemes
+    admin-password: elemes_local_dev
+    app-username: elemes_app
+  data-plane-services: http://localhost:8083,http://localhost:8081,http://localhost:8082,http://localhost:8084,http://localhost:8085
