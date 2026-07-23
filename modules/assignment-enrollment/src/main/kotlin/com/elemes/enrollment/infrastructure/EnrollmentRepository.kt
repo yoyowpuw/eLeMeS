@@ -32,6 +32,29 @@ class EnrollmentRepository(
     }
 
     /**
+     * The still-active step-`Enrollment` for a Learning Path — what a
+     * caller polling `PathProgress` actually wants to link into (see
+     * `PathEnrollmentController.get()`).
+     *
+     * Filters on `status != 'COMPLETED'` rather than "most recently
+     * updated" — `PathProgressService.onEnrollmentCompleted()` saves the
+     * *next* step's enrollment before `EnrollmentController.complete()`
+     * goes on to save the *original*, just-completed one, so the
+     * original's `updated_at` ends up later than the next step's despite
+     * being the older event. `order by updated_at desc limit 1` alone
+     * picked the wrong (just-completed) row for exactly that reason —
+     * caught by end-to-end path-progress testing, not by the type system.
+     * At most one non-completed row exists per `pathProgressId` at a time,
+     * so this is unambiguous.
+     */
+    fun findCurrentStepEnrollmentId(pathProgressId: UUID): UUID? =
+        jdbcTemplate.query(
+            "select enrollment_id from enrollment_projection where path_progress_id = ? and status != 'COMPLETED' order by updated_at desc limit 1",
+            { rs, _ -> UUID.fromString(rs.getString("enrollment_id")) },
+            pathProgressId,
+        ).firstOrNull()
+
+    /**
      * `processedMessage`, when given, is recorded in the same transaction as
      * the event-store append below — see ProcessedMessageStore's doc comment
      * for why this must stay atomic with the write it accompanies.

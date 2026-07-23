@@ -7,6 +7,9 @@ import { EnrollmentsPage } from "./pages/EnrollmentsPage";
 import { EnrollmentDetailPage } from "./pages/EnrollmentDetailPage";
 import { CertificatesPage } from "./pages/CertificatesPage";
 import { VerifyPage } from "./pages/VerifyPage";
+import { PathsPage } from "./pages/PathsPage";
+import { PathEnrollPage } from "./pages/PathEnrollPage";
+import { PathProgressPage } from "./pages/PathProgressPage";
 
 export function App() {
   return (
@@ -15,6 +18,9 @@ export function App() {
         <Route index element={<Dashboard />} />
         <Route path="verify" element={<VerifyPage />} />
         <Route path="courses" element={<RequireAuth><CoursesPage /></RequireAuth>} />
+        <Route path="paths" element={<RequireAuth><PathsPage /></RequireAuth>} />
+        <Route path="paths/:pathId/enroll" element={<RequireAuth><PathEnrollPage /></RequireAuth>} />
+        <Route path="path-enrollments/:pathProgressId" element={<RequireAuth><PathProgressPage /></RequireAuth>} />
         <Route path="enrollments" element={<RequireAuth><EnrollmentsPage /></RequireAuth>} />
         <Route path="enrollments/:enrollmentId" element={<RequireAuth><EnrollmentDetailPage /></RequireAuth>} />
         <Route path="certificates" element={<RequireAuth><CertificatesPage /></RequireAuth>} />

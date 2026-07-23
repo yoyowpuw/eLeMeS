@@ -1,9 +1,11 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useParams } from "react-router-dom";
+import { useQueryClient } from "@tanstack/react-query";
 import { useCompleteEnrollment, useEnrollment, useStartEnrollment } from "../api/enrollments";
 import { useStartAssessment, useSubmitAssessment } from "../api/assessments";
 import { useCertificateByEnrollment } from "../api/certificates";
 import { ApiError } from "../api/http";
+import type { Enrollment } from "../api/types";
 
 export function EnrollmentDetailPage() {
   const { enrollmentId } = useParams<{ enrollmentId: string }>();
@@ -12,6 +14,32 @@ export function EnrollmentDetailPage() {
   const complete = useCompleteEnrollment();
   const startAssessment = useStartAssessment();
   const submitAssessment = useSubmitAssessment();
+  const queryClient = useQueryClient();
+
+  // A Learning Path step's `Enrollment` is created server-side, not via
+  // `useEnroll()` — so `myEnrollments` (the session-scoped list the
+  // Certificates page reads) would never learn about it, or about its
+  // *current* status, without this. Keyed on the live query result (not
+  // captured once) so it stays in sync — critically, right after
+  // `complete.mutate()` succeeds and `enrollment.status` flips to
+  // COMPLETED, which is exactly when the Certificates page needs to know
+  // a certificate might now exist. An earlier version of this only
+  // registered a one-time snapshot from `PathProgressPage`, which froze
+  // at whatever status the enrollment had at that moment (almost always
+  // IN_PROGRESS, since the user is about to navigate away to complete
+  // it) — found by actually driving the UI through a full path completion
+  // in a real browser, not by testing this endpoint in isolation.
+  useEffect(() => {
+    if (!enrollment) return;
+    queryClient.setQueryData(["myEnrollments"], (existing: Enrollment[] = []) => {
+      const index = existing.findIndex((e) => e.enrollmentId === enrollment.enrollmentId);
+      if (index === -1) return [...existing, enrollment];
+      if (existing[index] === enrollment) return existing;
+      const copy = [...existing];
+      copy[index] = enrollment;
+      return copy;
+    });
+  }, [enrollment, queryClient]);
 
   const [assessmentId, setAssessmentId] = useState<string | undefined>();
   const [questionText, setQuestionText] = useState("2 + 2 = ?");

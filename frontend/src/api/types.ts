@@ -32,6 +32,37 @@ export interface Assessment {
   score: number | null;
 }
 
+export interface LearningPath {
+  pathId: string;
+  tenantId: string;
+  name: string;
+  currentVersionId: string;
+  orgUnitId: string | null;
+}
+
+export interface PathStep {
+  stepOrder: number;
+  courseId: string;
+}
+
+export interface PathVersion {
+  pathId: string;
+  versionId: string;
+  versionNumber: number;
+  steps: PathStep[];
+}
+
+export interface PathProgress {
+  pathProgressId: string;
+  pathId: string;
+  pathVersionId: string;
+  status: "IN_PROGRESS" | "COMPLETED";
+  currentStepIndex: number;
+  totalSteps: number;
+  realizedStepCourseIds: string[];
+  currentStepEnrollmentId: string | null;
+}
+
 export interface Certificate {
   certificateId: string;
   enrollmentId: string;

@@ -54,5 +54,5 @@ opa:
 # README's Vault bootstrap step for how both were generated.
 vault:
   base-url: http://localhost:8200
-  role-id: 40cb5a49-682b-187d-f411-1c67176057af
-  secret-id: 271543a8-2ca1-4aa0-b693-234f6e3fa6b2
+  role-id: 6bd22380-6a6c-7de9-e71e-73667d8f3499
+  secret-id: 71ecee48-5338-7a39-5ed8-b78b4bbd96c4

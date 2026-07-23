@@ -1,4 +1,4 @@
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useAuth } from "react-oidc-context";
 import { apiFetch, ApiError, SERVICE_URLS } from "./http";
 import type { Certificate } from "./types";
@@ -34,6 +34,22 @@ export function useCertificate(certificateId: string | undefined) {
     queryFn: () => apiFetch<Certificate>(SERVICE_URLS.certificates, `/api/v1/certificates/${certificateId}`, auth.user?.access_token),
     enabled: !!certificateId && !!auth.user,
     retry: false,
+  });
+}
+
+/** Ch.19: the backend independently enforces this is admin-tenant-wide / manager-subtree-only — this button being visible is a UX convenience, not the actual authorization boundary. */
+export function useRevokeCertificate() {
+  const auth = useAuth();
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ certificateId, reason }: { certificateId: string; reason: string }) =>
+      apiFetch<Certificate>(SERVICE_URLS.certificates, `/api/v1/certificates/${certificateId}/revoke`, auth.user?.access_token, {
+        method: "POST",
+        body: JSON.stringify({ reason }),
+      }),
+    onSuccess: (certificate) => {
+      queryClient.setQueryData(["certificateByEnrollment", certificate.enrollmentId], certificate);
+    },
   });
 }
 
