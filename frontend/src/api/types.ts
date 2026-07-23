@@ -63,6 +63,14 @@ export interface PathProgress {
   currentStepEnrollmentId: string | null;
 }
 
+export interface OrgUnit {
+  orgUnitId: string;
+  tenantId: string;
+  name: string;
+  unitType: string;
+  managerUserId: string | null;
+}
+
 export interface Certificate {
   certificateId: string;
   enrollmentId: string;

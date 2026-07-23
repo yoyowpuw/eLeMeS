@@ -10,6 +10,8 @@ import { VerifyPage } from "./pages/VerifyPage";
 import { PathsPage } from "./pages/PathsPage";
 import { PathEnrollPage } from "./pages/PathEnrollPage";
 import { PathProgressPage } from "./pages/PathProgressPage";
+import { OrgUnitsPage } from "./pages/OrgUnitsPage";
+import { OrgUnitDetailPage } from "./pages/OrgUnitDetailPage";
 
 export function App() {
   return (
@@ -24,6 +26,8 @@ export function App() {
         <Route path="enrollments" element={<RequireAuth><EnrollmentsPage /></RequireAuth>} />
         <Route path="enrollments/:enrollmentId" element={<RequireAuth><EnrollmentDetailPage /></RequireAuth>} />
         <Route path="certificates" element={<RequireAuth><CertificatesPage /></RequireAuth>} />
+        <Route path="org-units" element={<RequireAuth><OrgUnitsPage /></RequireAuth>} />
+        <Route path="org-units/:orgUnitId" element={<RequireAuth><OrgUnitDetailPage /></RequireAuth>} />
       </Route>
     </Routes>
   );
