@@ -63,6 +63,14 @@ export interface PathProgress {
   currentStepEnrollmentId: string | null;
 }
 
+export interface Tenant {
+  tenantId: string;
+  name: string;
+  isolationTier: "POOLED" | "SILO";
+  region: string;
+  status: "PROVISIONING" | "ACTIVE" | "OFFBOARDED";
+}
+
 export interface OrgUnit {
   orgUnitId: string;
   tenantId: string;

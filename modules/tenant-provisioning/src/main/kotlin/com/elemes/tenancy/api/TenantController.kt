@@ -11,6 +11,7 @@ import com.elemes.tenancy.TenantStatus
 import com.elemes.tenancy.infrastructure.OpaDataPusher
 import com.elemes.tenancy.infrastructure.SiloProvisioner
 import com.elemes.tenancy.infrastructure.TenantRepository
+import org.springframework.dao.DuplicateKeyException
 import org.springframework.http.HttpStatus
 import org.springframework.http.ResponseEntity
 import org.springframework.security.core.annotation.AuthenticationPrincipal
@@ -28,6 +29,7 @@ data class CreateTenantRequest(val tenantId: String, val name: String, val isola
 data class TenantResponse(val tenantId: String, val name: String, val isolationTier: String, val region: String, val status: String)
 
 class TenantNotFoundException(id: String) : RuntimeException("Tenant $id not found")
+class TenantAlreadyExistsException(id: String) : RuntimeException("Tenant $id already exists")
 class InvalidTenantTransitionException(id: String, from: TenantStatus, to: TenantStatus) :
     RuntimeException("Cannot transition tenant $id from $from to $to")
 
@@ -60,7 +62,11 @@ class TenantController(
     @PostMapping
     fun create(@AuthenticationPrincipal jwt: Jwt, @RequestBody request: CreateTenantRequest): ResponseEntity<TenantResponse> {
         authorizer.check(AuthzInput("tenant_create", jwt.tenantId().value, jwt.roles()))
-        var tenant = repository.create(request.tenantId, request.name, request.isolationTier, request.region)
+        var tenant = try {
+            repository.create(request.tenantId, request.name, request.isolationTier, request.region)
+        } catch (ex: DuplicateKeyException) {
+            throw TenantAlreadyExistsException(request.tenantId)
+        }
         if (tenant.isolationTier == IsolationTier.SILO) {
             val siloDatabaseUrl = siloProvisioner.provision(tenant.tenantId, jwt.tokenValue)
             tenant = repository.updateSiloDatabase(tenant.tenantId, siloDatabaseUrl) ?: tenant
@@ -128,6 +134,10 @@ class TenantExceptionHandler {
     @ExceptionHandler(InvalidTenantTransitionException::class)
     fun handleInvalidTransition(ex: InvalidTenantTransitionException): ResponseEntity<Map<String, String>> =
         ResponseEntity.status(HttpStatus.CONFLICT).body(mapOf("error" to (ex.message ?: "invalid transition")))
+
+    @ExceptionHandler(TenantAlreadyExistsException::class)
+    fun handleAlreadyExists(ex: TenantAlreadyExistsException): ResponseEntity<Map<String, String>> =
+        ResponseEntity.status(HttpStatus.CONFLICT).body(mapOf("error" to (ex.message ?: "already exists")))
 
     @ExceptionHandler(ForbiddenException::class)
     fun handleForbidden(ex: ForbiddenException): ResponseEntity<Map<String, String>> =

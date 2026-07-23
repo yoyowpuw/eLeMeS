@@ -9,6 +9,7 @@ export const SERVICE_URLS = {
   assessments: "http://localhost:8082",
   certificates: "http://localhost:8084",
   orgUnits: "http://localhost:8085",
+  tenants: "http://localhost:8086",
 } as const;
 
 export class ApiError extends Error {

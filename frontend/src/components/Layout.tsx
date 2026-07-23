@@ -20,6 +20,7 @@ export function Layout() {
               <Link to="/courses">Courses</Link>
               <Link to="/paths">Learning Paths</Link>
               <Link to="/org-units">Org Hierarchy</Link>
+              <Link to="/tenants">{roles.includes("platform-admin") ? "Tenants" : "My Tenant"}</Link>
               <Link to="/enrollments">My Enrollments</Link>
               <Link to="/certificates">My Certificates</Link>
             </>
