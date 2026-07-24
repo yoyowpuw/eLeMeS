@@ -6,14 +6,14 @@ import { LegacyPage } from "../components/LegacyPage";
 import { Dashboard } from "../pages/Dashboard";
 import { CoursesListPage } from "../features/courses/pages/CoursesListPage";
 import { EnrollmentsListPage } from "../features/enrollments/pages/EnrollmentsListPage";
-import { EnrollmentDetailPage } from "../pages/EnrollmentDetailPage";
+import { EnrollmentDetailPage } from "../features/enrollments/pages/EnrollmentDetailPage";
 import { CertificatesListPage } from "../features/certificates/pages/CertificatesListPage";
-import { VerifyPage } from "../pages/VerifyPage";
+import { VerifyPage } from "../features/verify/pages/VerifyPage";
 import { PathsListPage } from "../features/paths/pages/PathsListPage";
-import { PathEnrollPage } from "../pages/PathEnrollPage";
-import { PathProgressPage } from "../pages/PathProgressPage";
+import { PathEnrollPage } from "../features/paths/pages/PathEnrollPage";
+import { PathProgressPage } from "../features/paths/pages/PathProgressPage";
 import { OrgUnitsListPage } from "../features/org-units/pages/OrgUnitsListPage";
-import { OrgUnitDetailPage } from "../pages/OrgUnitDetailPage";
+import { OrgUnitDetailPage } from "../features/org-units/pages/OrgUnitDetailPage";
 import { TenantsListPage } from "../features/tenants/pages/TenantsListPage";
 
 /**
@@ -21,44 +21,41 @@ import { TenantsListPage } from "../features/tenants/pages/TenantsListPage";
  * route trees (own URL namespace, own layout, own nav) rather than the
  * single-tree-with-inline-role-checks the app used before this redesign —
  * `RequireRole` (inside each layout) enforces this at the route level, not
- * inside page bodies. `/manage` and `/admin` still render today's
- * still-unmigrated page components for now (Courses/Paths/Enrollments stay
- * in the Learner tree only — browsing/enrolling is a learner action even
- * for a manager/admin acting as their own learner; org-hierarchy management
- * and tenant administration have no learner-facing analogue, so they move
- * into the management trees). Dashboards are real per-role pages built in
- * a later phase — index routes reuse the old Dashboard component as a
- * placeholder until then. Detail/form pages (enrollment detail, org unit
- * detail, path enroll/progress, verify) are still the old design — migrated
- * in the next phase.
+ * inside page bodies. `/manage` and `/admin` render the shared
+ * Org Hierarchy pages (org-hierarchy management has no learner-facing
+ * analogue) — Courses/Paths/Enrollments/Certificates stay in the Learner
+ * tree only, since browsing/enrolling is a learner action even for a
+ * manager/admin acting as their own learner. Every page is now on the new
+ * design system except the Dashboard, which is a real per-role page built
+ * in the next phase — its index routes reuse the old placeholder until then.
  */
 export function App() {
   return (
     <Routes>
       {/* Ch.26 §6: must keep working fully signed-out — no layout, no auth gate. */}
-      <Route path="verify" element={<LegacyPage><VerifyPage /></LegacyPage>} />
+      <Route path="verify" element={<VerifyPage />} />
 
       <Route element={<LearnerLayout />}>
         <Route index element={<LegacyPage><Dashboard /></LegacyPage>} />
         <Route path="courses" element={<CoursesListPage />} />
         <Route path="paths" element={<PathsListPage />} />
-        <Route path="paths/:pathId/enroll" element={<LegacyPage><PathEnrollPage /></LegacyPage>} />
-        <Route path="path-enrollments/:pathProgressId" element={<LegacyPage><PathProgressPage /></LegacyPage>} />
+        <Route path="paths/:pathId/enroll" element={<PathEnrollPage />} />
+        <Route path="path-enrollments/:pathProgressId" element={<PathProgressPage />} />
         <Route path="enrollments" element={<EnrollmentsListPage />} />
-        <Route path="enrollments/:enrollmentId" element={<LegacyPage><EnrollmentDetailPage /></LegacyPage>} />
+        <Route path="enrollments/:enrollmentId" element={<EnrollmentDetailPage />} />
         <Route path="certificates" element={<CertificatesListPage />} />
       </Route>
 
       <Route path="manage" element={<ManagerLayout />}>
         <Route index element={<LegacyPage><Dashboard /></LegacyPage>} />
         <Route path="org-units" element={<OrgUnitsListPage />} />
-        <Route path="org-units/:orgUnitId" element={<LegacyPage><OrgUnitDetailPage /></LegacyPage>} />
+        <Route path="org-units/:orgUnitId" element={<OrgUnitDetailPage />} />
       </Route>
 
       <Route path="admin" element={<AdminLayout />}>
         <Route index element={<LegacyPage><Dashboard /></LegacyPage>} />
         <Route path="org-units" element={<OrgUnitsListPage />} />
-        <Route path="org-units/:orgUnitId" element={<LegacyPage><OrgUnitDetailPage /></LegacyPage>} />
+        <Route path="org-units/:orgUnitId" element={<OrgUnitDetailPage />} />
         <Route path="tenants" element={<TenantsListPage />} />
       </Route>
     </Routes>
