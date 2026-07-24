@@ -47,8 +47,20 @@ export const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
         disabled={disabled || isLoading}
         {...props}
       >
-        {isLoading && <Loader2 className="size-4 animate-spin" aria-hidden="true" />}
-        {children}
+        {/*
+          Radix `Slot` (what `Comp` becomes when `asChild`) requires exactly
+          one element child — `{isLoading && <Loader2/>}{children}` would
+          pass Slot an array containing a stray `false` alongside the real
+          child even while not loading, which Slot rejects outright. `asChild`
+          buttons in this app are never used with `isLoading` at the same
+          time, so skip the wrapper entirely in that mode.
+        */}
+        {asChild ? children : (
+          <>
+            {isLoading && <Loader2 className="size-4 animate-spin" aria-hidden="true" />}
+            {children}
+          </>
+        )}
       </Comp>
     );
   },
