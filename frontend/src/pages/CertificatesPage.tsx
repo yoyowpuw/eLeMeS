@@ -26,7 +26,7 @@ function CertificateRow({ enrollment, canRevoke }: { enrollment: Enrollment; can
       <div className="entity-actions">
         <Link to={`/verify?certificateId=${certificate.certificateId}`}>Verify</Link>
         {canRevoke && certificate.status === "ISSUED" && !showRevokeForm && (
-          <button onClick={() => setShowRevokeForm(true)}>Revoke…</button>
+          <button className="button-danger" onClick={() => setShowRevokeForm(true)}>Revoke…</button>
         )}
       </div>
       {showRevokeForm && (
@@ -40,7 +40,7 @@ function CertificateRow({ enrollment, canRevoke }: { enrollment: Enrollment; can
             Reason
             <input value={reason} onChange={(e) => setReason(e.target.value)} required />
           </label>
-          <button type="submit" disabled={revoke.isPending}>
+          <button type="submit" className="button-danger" disabled={revoke.isPending}>
             {revoke.isPending ? "Revoking…" : "Confirm revoke"}
           </button>
           {revoke.isError && (

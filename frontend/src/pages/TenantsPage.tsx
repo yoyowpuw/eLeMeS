@@ -70,7 +70,7 @@ function PlatformAdminView() {
 
       <h2>All tenants</h2>
       {isLoading ? (
-        <p>Loading…</p>
+        <p><span className="spinner" aria-hidden="true" />Loading…</p>
       ) : !tenants || tenants.length === 0 ? (
         <p>No tenants yet.</p>
       ) : (
@@ -90,11 +90,18 @@ function PlatformAdminView() {
                     onClick={() => migrateTenant.mutate(tenant.tenantId)}
                     disabled={migrateTenant.isPending && migrateTenant.variables === tenant.tenantId}
                   >
-                    {migrateTenant.isPending && migrateTenant.variables === tenant.tenantId ? "Migrating…" : "Migrate to Silo"}
+                    {migrateTenant.isPending && migrateTenant.variables === tenant.tenantId ? (
+                      <>
+                        <span className="spinner" aria-hidden="true" />
+                        Migrating…
+                      </>
+                    ) : (
+                      "Migrate to Silo"
+                    )}
                   </button>
                 )}
                 {tenant.status !== "OFFBOARDED" && tenant.status !== "MIGRATING" && (
-                  <button onClick={() => offboardTenant.mutate(tenant.tenantId)} disabled={offboardTenant.isPending}>
+                  <button className="button-danger" onClick={() => offboardTenant.mutate(tenant.tenantId)} disabled={offboardTenant.isPending}>
                     Offboard
                   </button>
                 )}
@@ -127,7 +134,7 @@ function OwnTenantView({ tenantId }: { tenantId: string | undefined }) {
       <h1>My Tenant</h1>
       <p>Only a <code>platform-admin</code> can manage tenant lifecycle — this is a read-only view of your own tenant.</p>
       {isLoading ? (
-        <p>Loading…</p>
+        <p><span className="spinner" aria-hidden="true" />Loading…</p>
       ) : isError ? (
         <p role="alert">{error instanceof ApiError ? error.message : "Failed to load your tenant"}</p>
       ) : tenant ? (

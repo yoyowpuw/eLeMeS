@@ -51,7 +51,7 @@ export function EnrollmentDetailPage() {
   const isCompleted = enrollment?.status === "COMPLETED";
   const { data: certificate } = useCertificateByEnrollment(enrollmentId, isCompleted);
 
-  if (isLoading) return <p>Loading…</p>;
+  if (isLoading) return <p><span className="spinner" aria-hidden="true" />Loading…</p>;
   if (!enrollment) return <p>Enrollment not found.</p>;
 
   function handleStartAssessment(e: React.FormEvent) {

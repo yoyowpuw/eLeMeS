@@ -22,7 +22,7 @@ export function OrgUnitDetailPage() {
   const [newParentId, setNewParentId] = useState(ROOT);
   const [reparentHierarchyType, setReparentHierarchyType] = useState(DEFAULT_HIERARCHY_TYPE);
 
-  if (isLoading) return <p>Loading…</p>;
+  if (isLoading) return <p><span className="spinner" aria-hidden="true" />Loading…</p>;
   if (!unit) return <p>Org unit not found.</p>;
 
   function handleReparent(e: React.FormEvent) {

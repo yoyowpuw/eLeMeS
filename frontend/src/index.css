@@ -64,9 +64,26 @@ a {
 
 .app-nav nav {
   display: flex;
-  gap: 16px;
+  gap: 4px;
   flex: 1;
   flex-wrap: wrap;
+}
+
+.app-nav nav a {
+  text-decoration: none;
+  padding: 6px 10px;
+  border-radius: 6px;
+  transition: background-color 120ms ease, color 120ms ease;
+}
+
+.app-nav nav a:hover {
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+
+.app-nav nav a.active {
+  color: var(--text-h);
+  font-weight: 600;
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
 }
 
 .app-nav__account {
@@ -96,6 +113,11 @@ a {
   flex-direction: column;
   gap: 10px;
   align-items: flex-start;
+  transition: border-color 120ms ease;
+}
+
+.entity-list .card:hover {
+  border-color: color-mix(in srgb, var(--accent) 40%, var(--border));
 }
 
 .card label {
@@ -123,11 +145,55 @@ button {
   color: white;
   font: inherit;
   cursor: pointer;
+  transition: filter 120ms ease, transform 80ms ease;
+}
+
+button:hover:not(:disabled) {
+  filter: brightness(1.1);
+}
+
+button:active:not(:disabled) {
+  transform: translateY(1px);
 }
 
 button:disabled {
   opacity: 0.6;
   cursor: not-allowed;
+}
+
+/* Destructive actions (offboard, revoke) get a visually distinct style from
+   constructive ones (create, activate, migrate) so a user can't mistake one
+   for the other at a glance — same purple button for both was a real gap. */
+.button-danger {
+  background: transparent;
+  color: var(--danger);
+  border-color: var(--danger);
+}
+
+.button-danger:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--danger) 12%, transparent);
+  filter: none;
+}
+
+.spinner {
+  display: inline-block;
+  width: 1em;
+  height: 1em;
+  /* currentColor-based, not a fixed palette color, so it stays visible
+     whether it's sitting in plain body text or inside a solid-purple
+     button with white text. */
+  border: 2px solid color-mix(in srgb, currentColor 25%, transparent);
+  border-top-color: currentColor;
+  border-radius: 50%;
+  vertical-align: -0.2em;
+  margin-right: 0.5em;
+  animation: spin 700ms linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 .entity-list {

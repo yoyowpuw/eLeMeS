@@ -5,7 +5,7 @@ export function PathProgressPage() {
   const { pathProgressId } = useParams<{ pathProgressId: string }>();
   const { data: progress, isLoading } = usePathProgress(pathProgressId);
 
-  if (isLoading) return <p>Loading…</p>;
+  if (isLoading) return <p><span className="spinner" aria-hidden="true" />Loading…</p>;
   if (!progress) return <p>Path progress not found.</p>;
 
   return (

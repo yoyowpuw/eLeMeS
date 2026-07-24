@@ -1,4 +1,4 @@
-import { Link, Outlet } from "react-router-dom";
+import { Link, NavLink, Outlet } from "react-router-dom";
 import { useAuth } from "react-oidc-context";
 import { rolesFromAccessToken, decodeAccessToken } from "../auth/jwt";
 
@@ -17,15 +17,15 @@ export function Layout() {
         <nav>
           {auth.isAuthenticated && (
             <>
-              <Link to="/courses">Courses</Link>
-              <Link to="/paths">Learning Paths</Link>
-              <Link to="/org-units">Org Hierarchy</Link>
-              <Link to="/tenants">{roles.includes("platform-admin") ? "Tenants" : "My Tenant"}</Link>
-              <Link to="/enrollments">My Enrollments</Link>
-              <Link to="/certificates">My Certificates</Link>
+              <NavLink to="/courses">Courses</NavLink>
+              <NavLink to="/paths">Learning Paths</NavLink>
+              <NavLink to="/org-units">Org Hierarchy</NavLink>
+              <NavLink to="/tenants">{roles.includes("platform-admin") ? "Tenants" : "My Tenant"}</NavLink>
+              <NavLink to="/enrollments">My Enrollments</NavLink>
+              <NavLink to="/certificates">My Certificates</NavLink>
             </>
           )}
-          <Link to="/verify">Verify a Certificate</Link>
+          <NavLink to="/verify">Verify a Certificate</NavLink>
         </nav>
         <div className="app-nav__account">
           {auth.isAuthenticated ? (
