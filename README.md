@@ -73,7 +73,7 @@ run it.
 | Object storage | S3-compatible | MinIO (provisioned, not yet used) |
 | Identity/Auth | CIAM platform | Keycloak (OIDC, custom `tenant_id` claim) |
 | Authorization | Policy-as-code | Open Policy Agent (Rego policy) |
-| Frontend | React | Vite + TypeScript, React Router, React Query, real OIDC Authorization Code + PKCE login against Keycloak |
+| Frontend | React | Vite + TypeScript, Tailwind + Radix UI (hand-built component library), TanStack Query/Table, React Hook Form + Zod, React Router, real OIDC Authorization Code + PKCE login against Keycloak |
 
 ## Project layout
 

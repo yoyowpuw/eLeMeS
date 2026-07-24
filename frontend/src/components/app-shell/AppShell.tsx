@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import type { ReactNode } from "react";
 import { Outlet } from "react-router-dom";
 import { NavLink } from "react-router-dom";
 import { Sidebar } from "./Sidebar";
@@ -9,7 +10,8 @@ import { cn } from "../../lib/utils";
 import { WORKSPACE_LABEL } from "./nav-config";
 import type { NavItem, Workspace } from "./nav-config";
 
-export function AppShell({ workspace, items }: { workspace: Workspace; items: NavItem[] }) {
+/** `children` lets a route render AppShell directly (e.g. the authenticated root) instead of only as a layout-route wrapper around `<Outlet/>`. */
+export function AppShell({ workspace, items, children }: { workspace: Workspace; items: NavItem[]; children?: ReactNode }) {
   const [mobileOpen, setMobileOpen] = useState(false);
   const [commandOpen, setCommandOpen] = useState(false);
 
@@ -55,7 +57,7 @@ export function AppShell({ workspace, items }: { workspace: Workspace; items: Na
           </SheetContent>
         </Sheet>
         <main className="flex-1 overflow-y-auto p-6">
-          <Outlet />
+          {children ?? <Outlet />}
         </main>
       </div>
     </div>

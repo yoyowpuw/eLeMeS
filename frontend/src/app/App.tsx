@@ -2,7 +2,7 @@ import { Route, Routes } from "react-router-dom";
 import { LearnerLayout } from "./layouts/LearnerLayout";
 import { ManagerLayout } from "./layouts/ManagerLayout";
 import { AdminLayout } from "./layouts/AdminLayout";
-import { LearnerDashboard } from "../features/dashboard/pages/LearnerDashboard";
+import { RootRoute } from "./RootRoute";
 import { ManagerDashboard } from "../features/dashboard/pages/ManagerDashboard";
 import { AdminDashboard } from "../features/dashboard/pages/AdminDashboard";
 import { CoursesListPage } from "../features/courses/pages/CoursesListPage";
@@ -34,9 +34,10 @@ export function App() {
     <Routes>
       {/* Ch.26 §6: must keep working fully signed-out — no layout, no auth gate. */}
       <Route path="verify" element={<VerifyPage />} />
+      {/* Real public landing page when signed out, the Learner dashboard when signed in — see RootRoute's own doc comment. Deliberately outside LearnerLayout's RequireAuth gate. */}
+      <Route path="/" element={<RootRoute />} />
 
       <Route element={<LearnerLayout />}>
-        <Route index element={<LearnerDashboard />} />
         <Route path="courses" element={<CoursesListPage />} />
         <Route path="paths" element={<PathsListPage />} />
         <Route path="paths/:pathId/enroll" element={<PathEnrollPage />} />

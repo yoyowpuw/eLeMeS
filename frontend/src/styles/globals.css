@@ -59,11 +59,23 @@
 }
 
 /*
- * Deliberately no global `body`/`h1-h3`/`*` rules here while index.css is
- * still active alongside this file (same unlayered-collision reasoning as
- * above) — index.css already owns those during the page-by-page migration.
- * They move here once index.css is deleted in the final cleanup phase.
+ * index.css (the old plain-CSS stylesheet every un-migrated page depended
+ * on) is gone now that every page is on this design system — its body
+ * defaults move here. Headings no longer need a global rule: every heading
+ * in the new components sets its own size explicitly via the `text-h1`/
+ * `text-h2`/`text-display` utilities above, rather than relying on bare
+ * `<h1>` styling the way the old pages did.
  */
+:root {
+  color-scheme: light dark;
+}
+
+body {
+  margin: 0;
+  font-family: var(--font-sans);
+  background: var(--ds-background);
+  color: var(--ds-foreground);
+}
 
 /*
  * Minimal, deliberate motion — Dialog/Sheet entrance only, nothing else in
