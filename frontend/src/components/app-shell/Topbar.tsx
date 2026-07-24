@@ -1,14 +1,23 @@
 import { Link, useLocation } from "react-router-dom";
-import { Menu } from "lucide-react";
+import { Menu, Search } from "lucide-react";
 import { Breadcrumbs } from "./Breadcrumbs";
 import { WorkspaceSwitcher } from "./WorkspaceSwitcher";
 import { UserMenu } from "./UserMenu";
 import { WORKSPACE_ROOT } from "./nav-config";
 import type { Workspace } from "./nav-config";
 
-export function Topbar({ workspace, onMenuClick }: { workspace: Workspace; onMenuClick: () => void }) {
+export function Topbar({
+  workspace,
+  onMenuClick,
+  onCommandPaletteClick,
+}: {
+  workspace: Workspace;
+  onMenuClick: () => void;
+  onCommandPaletteClick: () => void;
+}) {
   const { pathname } = useLocation();
   const atWorkspaceRoot = pathname === WORKSPACE_ROOT[workspace];
+  const isMac = typeof navigator !== "undefined" && navigator.platform.toUpperCase().includes("MAC");
 
   return (
     <header className="flex h-14 shrink-0 items-center gap-4 border-b border-slate-200 px-4 dark:border-slate-800">
@@ -27,6 +36,14 @@ export function Topbar({ workspace, onMenuClick }: { workspace: Workspace; onMen
         </div>
       )}
       <div className="ml-auto flex items-center gap-3">
+        <button
+          onClick={onCommandPaletteClick}
+          className="hidden items-center gap-2 rounded-md border border-slate-200 px-2.5 py-1.5 text-xs text-slate-500 hover:bg-slate-50 sm:flex dark:border-slate-800 dark:text-slate-400 dark:hover:bg-slate-900"
+        >
+          <Search className="size-3.5" aria-hidden="true" />
+          Jump to…
+          <kbd className="rounded border border-slate-200 px-1 font-sans dark:border-slate-700">{isMac ? "⌘K" : "Ctrl K"}</kbd>
+        </button>
         <UserMenu />
       </div>
     </header>

@@ -1,8 +1,9 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Outlet } from "react-router-dom";
 import { NavLink } from "react-router-dom";
 import { Sidebar } from "./Sidebar";
 import { Topbar } from "./Topbar";
+import { CommandPalette } from "./CommandPalette";
 import { Sheet, SheetContent, SheetTitle } from "../ui/sheet";
 import { cn } from "../../lib/utils";
 import { WORKSPACE_LABEL } from "./nav-config";
@@ -10,10 +11,23 @@ import type { NavItem, Workspace } from "./nav-config";
 
 export function AppShell({ workspace, items }: { workspace: Workspace; items: NavItem[] }) {
   const [mobileOpen, setMobileOpen] = useState(false);
+  const [commandOpen, setCommandOpen] = useState(false);
+
+  useEffect(() => {
+    function onKeyDown(e: KeyboardEvent) {
+      if (e.key === "k" && (e.metaKey || e.ctrlKey)) {
+        e.preventDefault();
+        setCommandOpen((prev) => !prev);
+      }
+    }
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  }, []);
 
   return (
     <div className="flex h-svh flex-col">
-      <Topbar workspace={workspace} onMenuClick={() => setMobileOpen(true)} />
+      <Topbar workspace={workspace} onMenuClick={() => setMobileOpen(true)} onCommandPaletteClick={() => setCommandOpen(true)} />
+      <CommandPalette open={commandOpen} onOpenChange={setCommandOpen} />
       <div className="flex flex-1 overflow-hidden">
         <Sidebar items={items} workspaceLabel={WORKSPACE_LABEL[workspace]} />
         <Sheet open={mobileOpen} onOpenChange={setMobileOpen}>

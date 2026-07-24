@@ -14,12 +14,12 @@ export const SheetOverlay = React.forwardRef<
   React.ComponentRef<typeof DialogPrimitive.Overlay>,
   React.ComponentPropsWithoutRef<typeof DialogPrimitive.Overlay>
 >(({ className, ...props }, ref) => (
-  <DialogPrimitive.Overlay ref={ref} className={cn("fixed inset-0 z-50 bg-slate-950/30", className)} {...props} />
+  <DialogPrimitive.Overlay ref={ref} className={cn("overlay-surface fixed inset-0 z-50 bg-slate-950/30", className)} {...props} />
 ));
 SheetOverlay.displayName = DialogPrimitive.Overlay.displayName;
 
 const sheetVariants = cva(
-  "fixed z-50 flex flex-col gap-4 border-slate-200 bg-white p-6 shadow-lg dark:border-slate-800 dark:bg-slate-950",
+  "sheet-surface fixed z-50 flex flex-col gap-4 border-slate-200 bg-white p-6 shadow-lg dark:border-slate-800 dark:bg-slate-950",
   {
     variants: {
       side: {

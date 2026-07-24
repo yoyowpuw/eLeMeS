@@ -64,3 +64,60 @@
  * above) — index.css already owns those during the page-by-page migration.
  * They move here once index.css is deleted in the final cleanup phase.
  */
+
+/*
+ * Minimal, deliberate motion — Dialog/Sheet entrance only, nothing else in
+ * this app animates. Targets Radix's own `data-state` attribute directly
+ * rather than requiring a Tailwind animation plugin or wiring Framer Motion
+ * into Radix's Portal/mount lifecycle (a real integration cost for very
+ * little visible benefit at this data-density). Radix's Presence primitive
+ * already delays unmounting until a CSS animation on the element finishes,
+ * so the closing keyframe genuinely plays, not just the opening one.
+ * `prefers-reduced-motion` disables both entirely, per that user's OS-level
+ * preference — not something an app should override.
+ */
+@media (prefers-reduced-motion: no-preference) {
+  .dialog-surface[data-state="open"] {
+    animation: dialog-in 150ms ease-out;
+  }
+  .dialog-surface[data-state="closed"] {
+    animation: dialog-out 100ms ease-in;
+  }
+  .sheet-surface[data-state="open"] {
+    animation: sheet-in 200ms ease-out;
+  }
+  .sheet-surface[data-state="closed"] {
+    animation: sheet-out 150ms ease-in;
+  }
+  .overlay-surface[data-state="open"] {
+    animation: overlay-in 150ms ease-out;
+  }
+  .overlay-surface[data-state="closed"] {
+    animation: overlay-out 100ms ease-in;
+  }
+}
+
+@keyframes dialog-in {
+  from { opacity: 0; transform: translate(-50%, -50%) scale(0.96); }
+  to { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+}
+@keyframes dialog-out {
+  from { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+  to { opacity: 0; transform: translate(-50%, -50%) scale(0.96); }
+}
+@keyframes sheet-in {
+  from { transform: translateX(-100%); }
+  to { transform: translateX(0); }
+}
+@keyframes sheet-out {
+  from { transform: translateX(0); }
+  to { transform: translateX(-100%); }
+}
+@keyframes overlay-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@keyframes overlay-out {
+  from { opacity: 1; }
+  to { opacity: 0; }
+}
