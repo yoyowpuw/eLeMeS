@@ -2,8 +2,9 @@ import { Route, Routes } from "react-router-dom";
 import { LearnerLayout } from "./layouts/LearnerLayout";
 import { ManagerLayout } from "./layouts/ManagerLayout";
 import { AdminLayout } from "./layouts/AdminLayout";
-import { LegacyPage } from "../components/LegacyPage";
-import { Dashboard } from "../pages/Dashboard";
+import { LearnerDashboard } from "../features/dashboard/pages/LearnerDashboard";
+import { ManagerDashboard } from "../features/dashboard/pages/ManagerDashboard";
+import { AdminDashboard } from "../features/dashboard/pages/AdminDashboard";
 import { CoursesListPage } from "../features/courses/pages/CoursesListPage";
 import { EnrollmentsListPage } from "../features/enrollments/pages/EnrollmentsListPage";
 import { EnrollmentDetailPage } from "../features/enrollments/pages/EnrollmentDetailPage";
@@ -21,13 +22,12 @@ import { TenantsListPage } from "../features/tenants/pages/TenantsListPage";
  * route trees (own URL namespace, own layout, own nav) rather than the
  * single-tree-with-inline-role-checks the app used before this redesign —
  * `RequireRole` (inside each layout) enforces this at the route level, not
- * inside page bodies. `/manage` and `/admin` render the shared
- * Org Hierarchy pages (org-hierarchy management has no learner-facing
+ * inside page bodies. `/manage` and `/admin` render the shared Org
+ * Hierarchy pages (org-hierarchy management has no learner-facing
  * analogue) — Courses/Paths/Enrollments/Certificates stay in the Learner
  * tree only, since browsing/enrolling is a learner action even for a
  * manager/admin acting as their own learner. Every page is now on the new
- * design system except the Dashboard, which is a real per-role page built
- * in the next phase — its index routes reuse the old placeholder until then.
+ * design system with a real per-role dashboard at each workspace's index.
  */
 export function App() {
   return (
@@ -36,7 +36,7 @@ export function App() {
       <Route path="verify" element={<VerifyPage />} />
 
       <Route element={<LearnerLayout />}>
-        <Route index element={<LegacyPage><Dashboard /></LegacyPage>} />
+        <Route index element={<LearnerDashboard />} />
         <Route path="courses" element={<CoursesListPage />} />
         <Route path="paths" element={<PathsListPage />} />
         <Route path="paths/:pathId/enroll" element={<PathEnrollPage />} />
@@ -47,13 +47,13 @@ export function App() {
       </Route>
 
       <Route path="manage" element={<ManagerLayout />}>
-        <Route index element={<LegacyPage><Dashboard /></LegacyPage>} />
+        <Route index element={<ManagerDashboard />} />
         <Route path="org-units" element={<OrgUnitsListPage />} />
         <Route path="org-units/:orgUnitId" element={<OrgUnitDetailPage />} />
       </Route>
 
       <Route path="admin" element={<AdminLayout />}>
-        <Route index element={<LegacyPage><Dashboard /></LegacyPage>} />
+        <Route index element={<AdminDashboard />} />
         <Route path="org-units" element={<OrgUnitsListPage />} />
         <Route path="org-units/:orgUnitId" element={<OrgUnitDetailPage />} />
         <Route path="tenants" element={<TenantsListPage />} />
