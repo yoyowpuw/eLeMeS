@@ -115,6 +115,18 @@
       "credentials": [{ "type": "password", "value": "silo-admin", "temporary": false }],
       "attributes": { "tenant_id": ["globex-silo"] },
       "realmRoles": ["admin"]
+    },
+    {
+      "username": "migrate-admin",
+      "enabled": true,
+      "emailVerified": true,
+      "email": "migrate-admin@migrate-test.example",
+      "firstName": "Migrate",
+      "lastName": "Admin",
+      "requiredActions": [],
+      "credentials": [{ "type": "password", "value": "migrate-admin", "temporary": false }],
+      "attributes": { "tenant_id": ["migrate-test"] },
+      "realmRoles": ["admin"]
     }
   ]
 }

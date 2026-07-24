@@ -61,6 +61,10 @@ restricted_actions := {
 	"tenant_read": {"admin", "platform-admin"},
 	"tenant_activate": {"platform-admin"},
 	"tenant_offboard": {"platform-admin"},
+	# Ch.12 §2 pool-to-silo migration: same platform-admin-only shape as
+	# activate/offboard — moving a tenant's data to a dedicated database is
+	# a platform decision, not something a tenant's own admin can trigger.
+	"tenant_migrate": {"platform-admin"},
 	# Ch.40 §3: rotating the certificate-signing key is admin-only — not a
 	# manager-delegable action, no org-scoping angle (it's not scoped to
 	# any single learner/course/org unit at all).

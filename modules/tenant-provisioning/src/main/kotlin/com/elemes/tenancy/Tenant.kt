@@ -10,8 +10,19 @@ import java.time.Instant
  * immediately, data plane retained for the regulatory retention period,
  * not deleted). No path back from OFFBOARDED — matches offboarding being a
  * terminal, contract-driven event, not a togglable flag.
+ *
+ * `MIGRATING` (Ch.12 §2/Ch.18 §6, added for the pool-to-silo migration the
+ * AKB itself only ever defined the cost trigger for, never a mechanism —
+ * see [[TenantController.migrateToSilo]]'s doc comment): an ACTIVE POOLED
+ * tenant transitions here for the duration of its data being copied to a
+ * new dedicated database. Reuses the exact same enforcement path as
+ * OFFBOARDED — `authz.rego`'s `tenant_active` only allows `ACTIVE` through,
+ * so a MIGRATING tenant's traffic is denied everywhere, immediately, the
+ * instant this is pushed to OPA, with zero new Rego logic. Transitions back
+ * to ACTIVE (isolationTier now SILO) on success, or back to ACTIVE
+ * (isolationTier still POOLED, best-effort) if the migration fails partway.
  */
-enum class TenantStatus { PROVISIONING, ACTIVE, OFFBOARDED }
+enum class TenantStatus { PROVISIONING, ACTIVE, MIGRATING, OFFBOARDED }
 
 /** Ch.12 §2/Ch.18 §3: pooled is the default; a SILO tenant gets a genuinely dedicated database — see SiloProvisioner. */
 enum class IsolationTier { POOLED, SILO }

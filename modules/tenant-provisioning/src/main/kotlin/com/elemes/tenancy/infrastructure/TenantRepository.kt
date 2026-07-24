@@ -51,6 +51,16 @@ class TenantRepository(private val jdbcTemplate: JdbcTemplate) {
         return findById(tenantId)
     }
 
+    /** Ch.12 §2 pool-to-silo migration's successful-completion step — flips tier, records the new database, and un-freezes traffic (status back to ACTIVE) in one update. */
+    fun completeSiloMigration(tenantId: String, siloDatabase: String): Tenant? {
+        val now = Instant.now()
+        jdbcTemplate.update(
+            "update tenants set isolation_tier = ?, silo_database = ?, status = ?, updated_at = ? where tenant_id = ?",
+            IsolationTier.SILO.name, siloDatabase, TenantStatus.ACTIVE.name, Timestamp.from(now), tenantId,
+        )
+        return findById(tenantId)
+    }
+
     private fun mapTenant(rs: ResultSet) = Tenant(
         tenantId = rs.getString("tenant_id"),
         name = rs.getString("name"),

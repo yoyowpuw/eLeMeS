@@ -18,22 +18,33 @@ private val POOLED_ROUTING = TenantRouting("POOLED", null)
  * `siloDatabaseUrl`) — reusing the existing pushed-registry mechanism
  * (README "What's proven" #16) rather than inventing a second one.
  *
- * Cached per tenantId with no expiry, deliberately: unlike tenant *status*
- * (which changes and is re-checked on every authz decision), a tenant's
- * isolation tier and silo database are fixed forever at provisioning
- * time — the AKB itself (Ch.18 §6 CTO note) flags pool-to-silo migration as
- * an unimplemented, explicitly out-of-scope follow-up, so there is no
- * "changed after first resolution" case to handle yet. An unknown tenant
- * (not yet pushed, or OPA unreachable) resolves to pooled — the safe
- * default, since the pooled cluster's RLS already isolates it correctly.
+ * Cached per tenantId with the same short TTL as [knownSiloTenantIds] below
+ * (not permanent, unlike an earlier version of this class): pool-to-silo
+ * migration ([TenantController.migrateToSilo] in tenant-provisioning) DOES
+ * flip a tenant's isolation tier after first resolution now, so a
+ * permanent cache would keep routing an already-migrated tenant's
+ * connections at the old (now-frozen, MIGRATING-then-stale) pooled
+ * database for the lifetime of this JVM. A short TTL bounds how long that
+ * staleness can last without needing a service restart or a
+ * push-based invalidation mechanism this project doesn't have yet. An
+ * unknown tenant (not yet pushed, or OPA unreachable) resolves to pooled —
+ * the safe default, since the pooled cluster's RLS already isolates it
+ * correctly.
  */
 class SiloRoutingClient(opaBaseUrl: String) {
 
     private val restClient = RestClient.create(opaBaseUrl)
     private val log = LoggerFactory.getLogger(javaClass)
-    private val cache = ConcurrentHashMap<String, TenantRouting>()
+    private val routingTtl = Duration.ofSeconds(30)
+    private val cache = ConcurrentHashMap<String, Pair<TenantRouting, Instant>>()
 
-    fun resolve(tenantId: String): TenantRouting = cache.computeIfAbsent(tenantId, ::fetch)
+    fun resolve(tenantId: String): TenantRouting {
+        val cached = cache[tenantId]
+        if (cached != null && Duration.between(cached.second, Instant.now()) < routingTtl) return cached.first
+        val routing = fetch(tenantId)
+        cache[tenantId] = routing to Instant.now()
+        return routing
+    }
 
     private val knownSiloTenantsTtl = Duration.ofSeconds(30)
     @Volatile private var knownSiloTenantsCachedAt: Instant = Instant.EPOCH

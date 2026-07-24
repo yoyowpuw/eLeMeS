@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useAuth } from "react-oidc-context";
-import { useActivateTenant, useCreateTenant, useOffboardTenant, useTenant, useTenants } from "../api/tenants";
+import { useActivateTenant, useCreateTenant, useMigrateTenantToSilo, useOffboardTenant, useTenant, useTenants } from "../api/tenants";
 import { rolesFromAccessToken, decodeAccessToken } from "../auth/jwt";
 import { ApiError } from "../api/http";
 import type { Tenant } from "../api/types";
@@ -20,6 +20,7 @@ function PlatformAdminView() {
   const createTenant = useCreateTenant();
   const activateTenant = useActivateTenant();
   const offboardTenant = useOffboardTenant();
+  const migrateTenant = useMigrateTenantToSilo();
 
   const [tenantId, setTenantId] = useState("");
   const [name, setName] = useState("");
@@ -84,7 +85,15 @@ function PlatformAdminView() {
                     Activate
                   </button>
                 )}
-                {tenant.status !== "OFFBOARDED" && (
+                {tenant.isolationTier === "POOLED" && tenant.status === "ACTIVE" && (
+                  <button
+                    onClick={() => migrateTenant.mutate(tenant.tenantId)}
+                    disabled={migrateTenant.isPending && migrateTenant.variables === tenant.tenantId}
+                  >
+                    {migrateTenant.isPending && migrateTenant.variables === tenant.tenantId ? "Migrating…" : "Migrate to Silo"}
+                  </button>
+                )}
+                {tenant.status !== "OFFBOARDED" && tenant.status !== "MIGRATING" && (
                   <button onClick={() => offboardTenant.mutate(tenant.tenantId)} disabled={offboardTenant.isPending}>
                     Offboard
                   </button>
@@ -94,10 +103,15 @@ function PlatformAdminView() {
           ))}
         </ul>
       )}
-      {(activateTenant.isError || offboardTenant.isError) && (
+      <p>
+        "Migrate to Silo" moves an existing pooled tenant's data into a brand-new dedicated database — the tenant is
+        write-frozen (status <code>MIGRATING</code>, same enforcement as an offboarded tenant) for the duration, and
+        only flips to the silo tier once every service has finished copying that tenant's rows across.
+      </p>
+      {(activateTenant.isError || offboardTenant.isError || migrateTenant.isError) && (
         <p role="alert">
-          {(activateTenant.error ?? offboardTenant.error) instanceof ApiError
-            ? ((activateTenant.error ?? offboardTenant.error) as ApiError).message
+          {(activateTenant.error ?? offboardTenant.error ?? migrateTenant.error) instanceof ApiError
+            ? ((activateTenant.error ?? offboardTenant.error ?? migrateTenant.error) as ApiError).message
             : "Action failed"}
         </p>
       )}

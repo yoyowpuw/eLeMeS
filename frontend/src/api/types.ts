@@ -68,7 +68,7 @@ export interface Tenant {
   name: string;
   isolationTier: "POOLED" | "SILO";
   region: string;
-  status: "PROVISIONING" | "ACTIVE" | "OFFBOARDED";
+  status: "PROVISIONING" | "ACTIVE" | "MIGRATING" | "OFFBOARDED";
 }
 
 export interface OrgUnit {

@@ -64,6 +64,27 @@ class SiloProvisioner(
         return siloDatabaseUrl
     }
 
+    /**
+     * Ch.12 §2 pool-to-silo migration's data-copy step — called by
+     * `TenantController.migrateToSilo()` only after [provision] (or, for a
+     * migration, the equivalent schema-only provisioning call) has already
+     * created the target schema on every service. Same fail-loud,
+     * no-retry/no-saga shape as [provision] — see its own doc comment for
+     * why that's an accepted limitation at this scope, not an oversight.
+     */
+    fun migrateData(tenantId: String, siloDatabaseUrl: String, bearerToken: String) {
+        val restClient = RestClient.create()
+        dataPlaneServiceBaseUrls.forEach { baseUrl ->
+            log.info("Migrating tenant {} data into silo database at {}", tenantId, baseUrl)
+            restClient.post()
+                .uri("$baseUrl/internal/silo/migrate-data")
+                .header("Authorization", "Bearer $bearerToken")
+                .body(ProvisionSiloRequest(tenantId, siloDatabaseUrl))
+                .retrieve()
+                .toBodilessEntity()
+        }
+    }
+
     private fun createDatabase(dbName: String) {
         DriverManager.getConnection("jdbc:postgresql://$siloHost:$siloPort/postgres", adminUsername, adminPassword).use { connection ->
             // CREATE DATABASE cannot run inside a transaction block.

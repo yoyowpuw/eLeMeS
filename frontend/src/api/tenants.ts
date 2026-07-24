@@ -56,6 +56,22 @@ export function useActivateTenant() {
   });
 }
 
+/** Ch.12 §2 pool-to-silo migration — synchronous like SILO-at-creation, so this can take a few seconds (schema provisioning + a real data copy across all 5 services) before it resolves. */
+export function useMigrateTenantToSilo() {
+  const auth = useAuth();
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (tenantId: string) =>
+      apiFetch<Tenant>(SERVICE_URLS.tenants, `/api/v1/tenants/${tenantId}/migrate-to-silo`, auth.user?.access_token, {
+        method: "POST",
+      }),
+    onSuccess: (tenant) => {
+      queryClient.setQueryData(["tenants"], (existing: Tenant[] = []) => existing.map((t) => (t.tenantId === tenant.tenantId ? tenant : t)));
+      queryClient.setQueryData(["tenant", tenant.tenantId], tenant);
+    },
+  });
+}
+
 export function useOffboardTenant() {
   const auth = useAuth();
   const queryClient = useQueryClient();

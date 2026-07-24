@@ -32,6 +32,8 @@ class TenantNotFoundException(id: String) : RuntimeException("Tenant $id not fou
 class TenantAlreadyExistsException(id: String) : RuntimeException("Tenant $id already exists")
 class InvalidTenantTransitionException(id: String, from: TenantStatus, to: TenantStatus) :
     RuntimeException("Cannot transition tenant $id from $from to $to")
+class TenantNotEligibleForMigrationException(id: String, reason: String) :
+    RuntimeException("Tenant $id cannot migrate to silo: $reason")
 
 /**
  * Ch.18 §2/§4: the control plane's own admin surface. Lifecycle management
@@ -120,6 +122,49 @@ class TenantController(
         return ResponseEntity.ok(updated.toResponse())
     }
 
+    /**
+     * Ch.12 §2 pool-to-silo migration: the AKB (Ch.18 §6, CTO note) only
+     * ever defined the cost/scale *trigger* for this (Ch.45 ADR-078), never
+     * a mechanism — this is a from-scratch design, not a spec
+     * implementation. Sequence: (1) freeze the tenant's traffic by pushing
+     * `MIGRATING` to OPA immediately — reuses `tenant_active`'s existing
+     * ACTIVE-only check with zero new Rego logic, the exact same
+     * enforcement path OFFBOARDED already relies on; (2) provision the
+     * silo database + every service's schema on it, same as a
+     * SILO-at-creation tenant; (3) have every service copy that tenant's
+     * own rows across (`SiloProvisioner.migrateData`); (4) flip
+     * `isolationTier` to SILO and unfreeze back to ACTIVE in one update.
+     * On any failure in (2)/(3), best-effort reverts the freeze so the
+     * tenant stays servable from the pooled cluster it never actually
+     * left — `isolationTier` is only flipped on full success, so a failed
+     * attempt can safely be retried. No saga/rollback of a *partial* data
+     * copy already sitting in the (now orphaned) silo database — same
+     * documented, accepted fail-loud limitation as `SiloProvisioner`
+     * itself.
+     */
+    @PostMapping("/{id}/migrate-to-silo")
+    fun migrateToSilo(@AuthenticationPrincipal jwt: Jwt, @PathVariable id: String): ResponseEntity<TenantResponse> {
+        authorizer.check(AuthzInput("tenant_migrate", jwt.tenantId().value, jwt.roles()))
+        val tenant = loadOrThrow(id)
+        if (tenant.isolationTier != IsolationTier.POOLED) throw TenantNotEligibleForMigrationException(id, "already ${tenant.isolationTier}")
+        if (tenant.status != TenantStatus.ACTIVE) throw TenantNotEligibleForMigrationException(id, "status is ${tenant.status}, must be ACTIVE")
+
+        val migrating = repository.updateStatus(id, TenantStatus.MIGRATING) ?: throw TenantNotFoundException(id)
+        opaDataPusher.push(migrating)
+
+        return try {
+            val siloDatabaseUrl = siloProvisioner.provision(id, jwt.tokenValue)
+            siloProvisioner.migrateData(id, siloDatabaseUrl, jwt.tokenValue)
+            val migrated = repository.completeSiloMigration(id, siloDatabaseUrl) ?: throw TenantNotFoundException(id)
+            opaDataPusher.push(migrated)
+            ResponseEntity.ok(migrated.toResponse())
+        } catch (ex: Exception) {
+            val reverted = repository.updateStatus(id, TenantStatus.ACTIVE)
+            if (reverted != null) opaDataPusher.push(reverted)
+            throw ex
+        }
+    }
+
     private fun loadOrThrow(id: String): Tenant = repository.findById(id) ?: throw TenantNotFoundException(id)
 }
 
@@ -138,6 +183,10 @@ class TenantExceptionHandler {
     @ExceptionHandler(TenantAlreadyExistsException::class)
     fun handleAlreadyExists(ex: TenantAlreadyExistsException): ResponseEntity<Map<String, String>> =
         ResponseEntity.status(HttpStatus.CONFLICT).body(mapOf("error" to (ex.message ?: "already exists")))
+
+    @ExceptionHandler(TenantNotEligibleForMigrationException::class)
+    fun handleNotEligibleForMigration(ex: TenantNotEligibleForMigrationException): ResponseEntity<Map<String, String>> =
+        ResponseEntity.status(HttpStatus.CONFLICT).body(mapOf("error" to (ex.message ?: "not eligible for migration")))
 
     @ExceptionHandler(ForbiddenException::class)
     fun handleForbidden(ex: ForbiddenException): ResponseEntity<Map<String, String>> =
