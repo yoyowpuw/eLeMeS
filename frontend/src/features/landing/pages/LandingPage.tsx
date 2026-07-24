@@ -25,12 +25,7 @@ export function LandingPage() {
     <div className="flex min-h-svh flex-col">
       <header className="flex h-14 items-center justify-between border-b border-slate-200 px-6 dark:border-slate-800">
         <span className="text-base font-bold text-blue-600">eLeMeS</span>
-        <div className="flex items-center gap-4">
-          <Link to="/verify" className="text-sm text-slate-600 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-100">
-            Verify a certificate
-          </Link>
-          <Button onClick={() => auth.signinRedirect()}>Sign in</Button>
-        </div>
+        <Button onClick={() => auth.signinRedirect()}>Sign in</Button>
       </header>
 
       <main className="mx-auto flex w-full max-w-4xl flex-1 flex-col gap-10 px-6 py-16">
