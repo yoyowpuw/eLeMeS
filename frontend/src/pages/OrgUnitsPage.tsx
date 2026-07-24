@@ -69,7 +69,8 @@ export function OrgUnitsPage() {
               <strong>{unit.name}</strong> — {unit.unitType}
               {unit.managerUserId && <div>Manager: {unit.managerUserId}</div>}
               <div className="entity-actions">
-                <Link to={`/org-units/${unit.orgUnitId}`}>Open</Link>
+                {/* Relative, not absolute — this page is mounted at both /manage/org-units and /admin/org-units. */}
+                <Link to={unit.orgUnitId}>Open</Link>
               </div>
             </li>
           ))}

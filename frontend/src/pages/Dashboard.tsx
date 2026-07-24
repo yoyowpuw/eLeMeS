@@ -1,10 +1,17 @@
 import { Link } from "react-router-dom";
 import { useAuth } from "react-oidc-context";
-import { rolesFromAccessToken } from "../auth/jwt";
 
+/**
+ * Temporary placeholder — reused as the index route for all three of
+ * `/`, `/manage`, and `/admin` until the real per-role dashboards are
+ * built (see the frontend redesign plan). Org Hierarchy and Tenants are
+ * deliberately NOT linked here anymore — they no longer live under this
+ * component's own tree (moved to /manage and /admin respectively), and
+ * this same component is temporarily mounted at all three roots, so a
+ * single correct destination doesn't exist yet for either link.
+ */
 export function Dashboard() {
   const auth = useAuth();
-  const roles = rolesFromAccessToken(auth.user?.access_token);
 
   return (
     <div>
@@ -14,10 +21,8 @@ export function Dashboard() {
         <ul className="quick-links">
           <li><Link to="/courses">Browse / author courses</Link></li>
           <li><Link to="/paths">Learning paths</Link></li>
-          <li><Link to="/org-units">Org hierarchy</Link></li>
           <li><Link to="/enrollments">Your enrollments</Link></li>
           <li><Link to="/certificates">Your certificates</Link></li>
-          <li><Link to="/tenants">{roles.includes("platform-admin") ? "Manage tenants" : "Your tenant"}</Link></li>
         </ul>
       ) : (
         <div className="empty-state">

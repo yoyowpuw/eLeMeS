@@ -1,0 +1,66 @@
+@import "tailwindcss";
+@import "@fontsource-variable/inter";
+
+/*
+ * Spacing (4/8/12/16/20/24/32/40/48) and radius (6-8px) are Tailwind v4's own
+ * defaults (p-1=4px..p-12=48px, rounded-md=6px, rounded-lg=8px) — no custom
+ * token config needed. Usage convention, not enforced by tooling: inputs and
+ * buttons use rounded-md; cards, dialogs, and panels use rounded-lg.
+ */
+@theme {
+  --font-sans: "Inter Variable", system-ui, "Segoe UI", Roboto, sans-serif;
+  --text-display: 2rem;      /* 32px */
+  --text-h1: 1.5rem;         /* 24px */
+  --text-h2: 1.25rem;        /* 20px */
+  --text-body: 0.9375rem;    /* 15px */
+  --text-sm: 0.8125rem;      /* 13px */
+  --text-xs: 0.75rem;        /* 12px */
+}
+
+/*
+ * `--ds-` prefixed, deliberately NOT plain `--background`/`--accent`/etc. —
+ * the still-active old index.css (imported alongside this during the
+ * page-by-page migration) defines its own identically-named `:root`
+ * variables, and two unlayered `:root{}` blocks setting the same custom
+ * property name cascade by source order regardless of Tailwind's layers
+ * (layers only govern layered rules) — an early version of this file used
+ * the unprefixed names and silently overwrote index.css's `--accent`,
+ * turning every un-migrated page's buttons blue instead of purple. New
+ * components should prefer Tailwind's own color utilities directly
+ * (`bg-blue-600` etc.) — these variables exist for the few places that
+ * genuinely need indirection (e.g. a chart color prop), not as the default.
+ */
+:root {
+  --ds-background: var(--color-white);
+  --ds-foreground: var(--color-slate-900);
+  --ds-muted: var(--color-slate-50);
+  --ds-muted-foreground: var(--color-slate-500);
+  --ds-border: var(--color-slate-200);
+  --ds-accent: var(--color-blue-600);
+  --ds-accent-foreground: var(--color-white);
+  --ds-success: var(--color-green-600);
+  --ds-warning: var(--color-amber-600);
+  --ds-danger: var(--color-red-600);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --ds-background: var(--color-slate-950);
+    --ds-foreground: var(--color-slate-100);
+    --ds-muted: var(--color-slate-900);
+    --ds-muted-foreground: var(--color-slate-400);
+    --ds-border: var(--color-slate-800);
+    --ds-accent: var(--color-blue-500);
+    --ds-accent-foreground: var(--color-white);
+    --ds-success: var(--color-green-500);
+    --ds-warning: var(--color-amber-500);
+    --ds-danger: var(--color-red-500);
+  }
+}
+
+/*
+ * Deliberately no global `body`/`h1-h3`/`*` rules here while index.css is
+ * still active alongside this file (same unlayered-collision reasoning as
+ * above) — index.css already owns those during the page-by-page migration.
+ * They move here once index.css is deleted in the final cleanup phase.
+ */

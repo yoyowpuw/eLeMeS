@@ -1,3 +1,14 @@
+/*
+ * Every rule below is scoped under `.legacy-page` (see components/LegacyPage.tsx)
+ * — these used to be bare element/class selectors, which is exactly what
+ * caused a real regression during the enterprise redesign: unlayered CSS
+ * always outranks Tailwind's layered utilities regardless of specificity,
+ * so a bare `a { color: var(--accent) }` here was silently overriding
+ * `text-blue-600` on brand-new AppShell components too, not just old pages
+ * (every `<Link>`/`<NavLink>` renders an `<a>`, every `Button` renders a
+ * `<button>`). Scoping under `.legacy-page` confines this file to the
+ * still-unmigrated old pages it was written for, exactly as intended.
+ */
 :root {
   --text: #2b2b33;
   --text-h: #08060d;
@@ -6,11 +17,6 @@
   --accent: #6d28d9;
   --danger: #b42318;
   --success: #067647;
-
-  font: 16px/1.5 system-ui, "Segoe UI", Roboto, sans-serif;
-  color-scheme: light dark;
-  color: var(--text);
-  background: var(--bg);
 }
 
 @media (prefers-color-scheme: dark) {
@@ -25,86 +31,47 @@
   }
 }
 
-* {
-  box-sizing: border-box;
+.legacy-page {
+  font: 16px/1.5 system-ui, "Segoe UI", Roboto, sans-serif;
+  color: var(--text);
+  background: var(--bg);
 }
 
-body {
-  margin: 0;
-}
-
-h1, h2, h3 {
+/*
+ * Tailwind's Preflight (imported alongside this file during the redesign's
+ * page-by-page migration — see styles/globals.css) resets heading
+ * font-size/weight/margin to `inherit` — real author CSS in a `@layer`
+ * still outranks the browser's own UA-stylesheet defaults, so without this
+ * explicit restoration every un-migrated page's headings would go flat.
+ * Values match the browser defaults this file always implicitly relied on.
+ */
+.legacy-page h1, .legacy-page h2, .legacy-page h3 {
   color: var(--text-h);
 }
 
-a {
+.legacy-page h1 {
+  font-size: 2em;
+  font-weight: bold;
+  margin: 0.67em 0;
+}
+
+.legacy-page h2 {
+  font-size: 1.5em;
+  font-weight: bold;
+  margin: 0.83em 0;
+}
+
+.legacy-page h3 {
+  font-size: 1.17em;
+  font-weight: bold;
+  margin: 1em 0;
+}
+
+.legacy-page a {
   color: var(--accent);
 }
 
-.app-shell {
-  min-height: 100svh;
-  display: flex;
-  flex-direction: column;
-}
-
-.app-nav {
-  display: flex;
-  align-items: center;
-  gap: 24px;
-  padding: 12px 24px;
-  border-bottom: 1px solid var(--border);
-  flex-wrap: wrap;
-}
-
-.app-nav__brand a {
-  font-weight: 700;
-  font-size: 20px;
-  text-decoration: none;
-}
-
-.app-nav nav {
-  display: flex;
-  gap: 4px;
-  flex: 1;
-  flex-wrap: wrap;
-}
-
-.app-nav nav a {
-  text-decoration: none;
-  padding: 6px 10px;
-  border-radius: 6px;
-  transition: background-color 120ms ease, color 120ms ease;
-}
-
-.app-nav nav a:hover {
-  background: color-mix(in srgb, var(--accent) 12%, transparent);
-}
-
-.app-nav nav a.active {
-  color: var(--text-h);
-  font-weight: 600;
-  background: color-mix(in srgb, var(--accent) 18%, transparent);
-}
-
-.app-nav__account {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-}
-
-.app-nav__who {
-  font-size: 13px;
-  opacity: 0.8;
-}
-
-.app-content {
-  padding: 24px;
-  max-width: 720px;
-  margin: 0 auto;
-  width: 100%;
-}
-
-.card {
+.legacy-page .card {
   border: 1px solid var(--border);
   border-radius: 8px;
   padding: 16px;
@@ -116,11 +83,11 @@ a {
   transition: border-color 120ms ease;
 }
 
-.entity-list .card:hover {
+.legacy-page .entity-list .card:hover {
   border-color: color-mix(in srgb, var(--accent) 40%, var(--border));
 }
 
-.card label {
+.legacy-page .card label {
   display: flex;
   flex-direction: column;
   gap: 4px;
@@ -128,7 +95,7 @@ a {
   font-size: 14px;
 }
 
-.card input, .card select {
+.legacy-page .card input, .legacy-page .card select {
   padding: 8px;
   border: 1px solid var(--border);
   border-radius: 4px;
@@ -137,7 +104,7 @@ a {
   font: inherit;
 }
 
-button {
+.legacy-page button {
   padding: 8px 16px;
   border-radius: 6px;
   border: 1px solid var(--accent);
@@ -148,15 +115,15 @@ button {
   transition: filter 120ms ease, transform 80ms ease;
 }
 
-button:hover:not(:disabled) {
+.legacy-page button:hover:not(:disabled) {
   filter: brightness(1.1);
 }
 
-button:active:not(:disabled) {
+.legacy-page button:active:not(:disabled) {
   transform: translateY(1px);
 }
 
-button:disabled {
+.legacy-page button:disabled {
   opacity: 0.6;
   cursor: not-allowed;
 }
@@ -164,18 +131,18 @@ button:disabled {
 /* Destructive actions (offboard, revoke) get a visually distinct style from
    constructive ones (create, activate, migrate) so a user can't mistake one
    for the other at a glance — same purple button for both was a real gap. */
-.button-danger {
+.legacy-page .button-danger {
   background: transparent;
   color: var(--danger);
   border-color: var(--danger);
 }
 
-.button-danger:hover:not(:disabled) {
+.legacy-page .button-danger:hover:not(:disabled) {
   background: color-mix(in srgb, var(--danger) 12%, transparent);
   filter: none;
 }
 
-.spinner {
+.legacy-page .spinner {
   display: inline-block;
   width: 1em;
   height: 1em;
@@ -187,32 +154,32 @@ button:disabled {
   border-radius: 50%;
   vertical-align: -0.2em;
   margin-right: 0.5em;
-  animation: spin 700ms linear infinite;
+  animation: legacy-spin 700ms linear infinite;
 }
 
-@keyframes spin {
+@keyframes legacy-spin {
   to {
     transform: rotate(360deg);
   }
 }
 
-.entity-list {
+.legacy-page .entity-list {
   list-style: none;
   margin: 0;
   padding: 0;
 }
 
-.entity-actions {
+.legacy-page .entity-actions {
   display: flex;
   gap: 12px;
 }
 
-.empty-state {
+.legacy-page .empty-state {
   padding: 24px;
   text-align: center;
 }
 
-.quick-links {
+.legacy-page .quick-links {
   padding: 0;
   list-style: none;
   display: flex;
@@ -220,23 +187,23 @@ button:disabled {
   gap: 8px;
 }
 
-[role="alert"] {
+.legacy-page [role="alert"] {
   color: var(--danger);
 }
 
-.verify-result {
+.legacy-page .verify-result {
   font-size: 20px;
   font-weight: 600;
   padding: 16px;
   border-radius: 8px;
 }
 
-.verify-result--valid {
+.legacy-page .verify-result--valid {
   color: var(--success);
   border: 1px solid var(--success);
 }
 
-.verify-result--invalid {
+.legacy-page .verify-result--invalid {
   color: var(--danger);
   border: 1px solid var(--danger);
 }
